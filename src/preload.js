@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // dialogs
@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   findSubtitle: (videoPath) => ipcRenderer.invoke('find-subtitle', videoPath),
   generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
   preparePhoto: (photoPath) => ipcRenderer.invoke('prepare-photo', photoPath),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   savePng: (dataUrl, defaultName) => ipcRenderer.invoke('save-png', dataUrl, defaultName),
   scanFolder: (dirPath) => ipcRenderer.invoke('scan-folder', dirPath),
   openDirectoryDialog: () => ipcRenderer.invoke('open-directory-dialog'),

@@ -1292,7 +1292,7 @@ const [exportResolution, setExportResolution] =
         e.preventDefault()
         setDragDepth(0)
         const paths = Array.from(e.dataTransfer.files)
-          .map((f) => (f as File & { path?: string }).path)
+          .map((f) => window.electronAPI.getPathForFile(f))
           .filter((p): p is string => !!p)
         if (paths.length === 0) return
         setLoadingMessage('Importing dropped items…')

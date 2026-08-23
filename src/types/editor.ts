@@ -346,6 +346,7 @@ export interface ElectronAPI {
   preparePhoto: (
     photoPath: string
   ) => Promise<{ ok: boolean; path?: string; converted?: boolean; error?: string }>
+  getPathForFile: (file: File) => string
   savePng: (
     dataUrl: string,
     defaultName: string
