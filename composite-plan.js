@@ -20,6 +20,11 @@ function clampNum(v, lo, hi) {
 }
 
 function buildCompositePlan(videoTracks) {
+  console.log('[DEBUG composite] received', videoTracks.length, 'tracks');
+  for (const t of videoTracks) {
+    console.log('[DEBUG composite]   track:', t.clips?.length ?? 'NO CLIPS', 'clips',
+      JSON.stringify((t.clips??[]).map(c=>({p:c.position,d:c.duration,n:c.name}))));
+  }
   const maxEnd = Math.max(
     MIN_PIECE,
     ...videoTracks.flatMap((t) => t.clips.map((c) => c.position + c.duration))
@@ -56,20 +61,6 @@ function buildCompositePlan(videoTracks) {
     else segments.push({ clip, start, end });
   }
 
-  // ── dissolve pass: shrink A tail / B head, record boundary ────────────
-  const blendAfter = new Map(); // segment index -> {len, prevClip}
-  for (let i = 1; i < segments.length; i++) {
-    const a = segments[i - 1];
-    const b = segments[i];
-    if (!a.clip || !b.clip || a.clip === b.clip) continue;
-    const want = clampNum(Number(b.clip.dissolveIn) || 0, 0, 2);
-    if (want < 0.05) continue;
-    const len = Math.min(want, (a.end - a.start) * 0.4, (b.end - b.start) * 0.4);
-    if (len < 0.05) continue;
-    a.end -= len;
-    b.start += len;
-    blendAfter.set(i, { len, prevClip: a.clip });
-  }
 
   // ── emit ordered pieces ────────────────────────────────────────────────
   const pieces = [];
@@ -87,18 +78,6 @@ function buildCompositePlan(videoTracks) {
       cursor = seg.start;
     }
 
-    const blendInfo = blendAfter.get(i);
-    if (blendInfo) {
-      pieces.push({
-        type: 'blend',
-        prevClip: blendInfo.prevClip,
-        clip: seg.clip,
-        startTl: cursor,
-        len: blendInfo.len,
-      });
-      cursor += blendInfo.len;
-    }
-
     if (!seg.clip) {
       pushBlack(cursor, seg.end);
       cursor = seg.end;
@@ -114,7 +93,7 @@ function buildCompositePlan(videoTracks) {
       srcTrim: Math.max(
         0,
         seg.clip.trimIn +
-          (Math.max(0, seg.start - seg.clip.position) + (blendInfo ? blendInfo.len : 0)) * speed
+          Math.max(0, seg.start - seg.clip.position) * speed
       ),
     });
     cursor = seg.end;

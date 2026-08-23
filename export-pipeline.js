@@ -525,7 +525,8 @@ async function runExport(options) {
     // ------------------------------------------------------- render segments
     // buildCompositePlan mirrors findVisualAt(): respects layering (later
     // track wins), real gaps become black filler, dissolves create blends.
-    const pieces = buildCompositePlan(visibleVideoTracks);
+    const pieces = buildCompositePlan(videoTracks);
+    console.log('[DEBUG] pieces:', pieces.length, JSON.stringify(pieces.map(p=>({t:p.type,n:p.clip?.name??null,start:p.startTl??p.tlStart,len:p.len??(p.tlEnd-p.tlStart)}))))
     const segPaths = [];
     const totalUnitsEstimate = Math.max(1, pieces.reduce((n, piece) => {
       if (piece.type === 'blend') return n + 1;

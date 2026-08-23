@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "package": "npm run build && electron-builder",
-    "package:mac": "npm run build && electron-builder --mac dir"
+    "package:mac": "npm run build && electron-builder --mac dir",
+    "test:integration": "node tests/integration-export.mjs"
   },
   "keywords": [
     "video",
