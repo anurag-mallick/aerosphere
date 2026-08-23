@@ -149,15 +149,78 @@ function colorEqArgs(colorAdjust) {
   if (colorAdjust.saturation) parts.push(`saturation=${(1 + clamp(colorAdjust.saturation, -0.99, 2)).toFixed(3)}`);
   if (colorAdjust.gamma) parts.push(`gamma=${(1 + clamp(colorAdjust.gamma, -0.99, 2)).toFixed(3)}`);
   const out = parts.length ? [`eq=${parts.join(':')}`] : [];
+
+  // Resolve-style Lift/Gamma/Gain RGB wheels via a single colorbalance call,
+  // merged with the green/magenta tint parameter
+  const cb = [];
+  const wheel = (param, v) => {
+    if (v) cb.push(`${param}=${clamp(v, -1, 1).toFixed(3)}`);
+  };
+  wheel('rs', colorAdjust.shadowsRed);
+  wheel('gs', colorAdjust.shadowsGreen);
+  wheel('bs', colorAdjust.shadowsBlue);
+  wheel('rm', colorAdjust.midtonesRed);
+  wheel('gm', colorAdjust.midtonesGreen ?? colorAdjust.tint); // tint rides on midtone magenta/green
+  wheel('bm', colorAdjust.midtonesBlue);
+  wheel('rh', colorAdjust.highlightsRed);
+  wheel('gh', colorAdjust.highlightsGreen);
+  wheel('bh', colorAdjust.highlightsBlue);
+  if (cb.length) out.push(`colorbalance=${cb.join(':')}`);
+
   if (colorAdjust.temperature) {
     const temp = 6500 + clamp(colorAdjust.temperature, -1, 1) * 2500;
     out.push(`colortemperature=temperature=${temp.toFixed(0)}:pl=1`);
   }
-  if (colorAdjust.tint) {
-    // green <-> magenta balance
-    out.push(`colorbalance=gm=${clamp(colorAdjust.tint, -1, 1).toFixed(3)}`);
+  if (colorAdjust.vignette && colorAdjust.vignette > 0.01) {
+    // stronger slider = wider angle = heavier falloff
+    const angle = Math.PI * (0.15 + clamp(colorAdjust.vignette, 0, 1) * 0.35);
+    out.push(`vignette=angle=${angle.toFixed(4)}`);
+  }
+  if (colorAdjust.sharpen !== undefined && Math.abs(colorAdjust.sharpen) > 0.04) {
+    out.push(`unsharp=5:5:${clamp(colorAdjust.sharpen, -1.5, 3).toFixed(3)}`);
   }
   return out;
+}
+
+/**
+ * Shared per-source audio processing chain (Fairlight-inspired):
+ * de-hum -> noise reduction -> loudness normalization -> EQ -> tempo ->
+ * volume -> fades -> delay. Returns filter fragments WITHOUT labels.
+ */
+function audioChainParts(src) {
+  const parts = [
+    'aresample=44100',
+    'aformat=channel_layouts=stereo',
+  ];
+  if (src.dehum === '50') {
+    parts.push('equalizer=f=50:t=k:w=0.25:g=-22', 'equalizer=f=100:t=k:w=0.25:g=-16');
+  } else if (src.dehum === '60') {
+    parts.push('equalizer=f=60:t=k:w=0.25:g=-22', 'equalizer=f=120:t=k:w=0.25:g=-16');
+  }
+  if (src.denoise) parts.push('afftdn=nr=12:nf=-25');
+  if (src.normalize) parts.push('loudnorm=I=-16:TP=-1.5:LRA=11');
+  if (src.eqBass) {
+    const g = clamp(src.eqBass, -1, 1) * 12;
+    if (Math.abs(g) > 0.05) parts.push(`bass=g=${g.toFixed(2)}:f=120`);
+  }
+  if (src.eqTreble) {
+    const g = clamp(src.eqTreble, -1, 1) * 12;
+    if (Math.abs(g) > 0.05) parts.push(`treble=g=${g.toFixed(2)}:f=3000`);
+  }
+  if (Math.abs((src.volume ?? 1) - 1) > 1e-6) parts.push(`volume=${Number(src.volume).toFixed(4)}`);
+  parts.push(...tempoChain(src.speed));
+
+  const durTl = src.durationTl ?? src.duration ?? 0;
+  if ((src.fadeIn ?? 0) > 0) {
+    parts.push(`afade=t=in:st=0:d=${Math.min(src.fadeIn, durTl).toFixed(3)}`);
+  }
+  if ((src.fadeOut ?? 0) > 0) {
+    const st = Math.max(0, durTl - src.fadeOut);
+    parts.push(`afade=t=out:st=${st.toFixed(3)}:d=${Math.min(src.fadeOut, durTl).toFixed(3)}`);
+  }
+  const delaySec = src.delaySec ?? 0;
+  parts.push(`adelay=${Math.round(Math.max(0, delaySec) * 1000)}|${Math.round(Math.max(0, delaySec) * 1000)}`);
+  return parts.filter(Boolean);
 }
 
 function logNormalizeArgs(enabled) {
@@ -520,6 +583,11 @@ async function runExport(options) {
           volume: clip.volume != null ? clamp(clip.volume, 0, 4) : 1,
           fadeIn: clip.fadeIn || 0,
           fadeOut: clip.fadeOut || 0,
+          denoise: !!clip.audioDenoise,
+          normalize: !!clip.audioNormalize,
+          eqBass: clip.eqBass || 0,
+          eqTreble: clip.eqTreble || 0,
+          dehum: clip.dehum || 'off',
         });
       }
     }
@@ -551,41 +619,14 @@ async function runExport(options) {
       audioSources.forEach((src) => {
         args.push('-ss', String(src.trimIn), '-t', String(src.spanSource), '-i', src.path);
         const label = `v${inputIdx}`;
-        const tempo = tempoChain(src.speed).join(',');
-        const chainParts = [
-          'aresample=44100',
-          'aformat=channel_layouts=stereo',
-          // Voice Isolation-style cleanup (Fairlight/FCP inspired)
-          src.denoise ? 'afftdn=nr=12:nf=-25' : '',
-          // broadcast loudness normalization
-          src.normalize ? 'loudnorm=I=-16:TP=-1.5:LRA=11' : '',
-          Math.abs(src.volume - 1) > 1e-6 ? `volume=${src.volume.toFixed(4)}` : '',
-          tempo,
-        ];
-        if (src.fadeIn > 0) {
-          chainParts.push(`afade=t=in:st=0:d=${Math.min(src.fadeIn, src.durationTl).toFixed(3)}`);
-        }
-        if (src.fadeOut > 0) {
-          const st = Math.max(0, src.durationTl - src.fadeOut);
-          chainParts.push(`afade=t=out:st=${st.toFixed(3)}:d=${Math.min(src.fadeOut, src.durationTl).toFixed(3)}`);
-        }
-        chainParts.push(`adelay=${Math.round(src.delaySec * 1000)}|${Math.round(src.delaySec * 1000)}`);
-        filters.push(`[${inputIdx}:a]${chainParts.filter(Boolean).join(',')}[${label}]`);
+        filters.push(`[${inputIdx}:a]${audioChainParts(src).join(',')}[${label}]`);
         sources.push(`[${label}]`);
         if (firstVoiceInput === null) firstVoiceInput = inputIdx;
         inputIdx += 1;
       });
       musicClips.forEach((m, j) => {
         args.push('-ss', String(Math.max(0, m.trimIn)), '-t', String(m.duration), '-i', m.path);
-        const delayMs = Math.round(Math.max(0, m.position) * 1000);
-        const musicChain = [
-          'aresample=44100',
-          'aformat=channel_layouts=stereo',
-          m.denoise ? 'afftdn=nr=12:nf=-25' : '',
-          m.normalize ? 'loudnorm=I=-16:TP=-1.5:LRA=11' : '',
-          `adelay=${delayMs}|${delayMs}`,
-        ].filter(Boolean);
-        filters.push(`[${inputIdx}:a]${musicChain.join(',')}[m${j}raw]`);
+        filters.push(`[${inputIdx}:a]${audioChainParts(m).join(',')}[m${j}raw]`);
 
         if (m.duck && firstVoiceInput !== null) {
           // Resolve/Fairlight-style ducker: music dips under dialogue via sidechain
@@ -689,4 +730,5 @@ module.exports = {
   clamp,
   outputSpec,
   buildFinalizeArgs,
+  audioChainParts,
 };

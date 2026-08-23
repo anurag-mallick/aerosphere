@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   outputSpec,
   buildFinalizeArgs,
+  audioChainParts,
   tempoChain,
   colorEqArgs,
   videoFadeArgs,
@@ -159,5 +160,59 @@ describe('output formats', () => {
     expect(spec.ext).toBe('mp4')
     expect(spec.videoCodec).toBe('h265')
     expect(buildFinalizeArgs(spec, 'a.mp4', 'b.mp4').reencode).toBe(false)
+  })
+})
+
+describe('Resolve-inspired look + Fairlight audio chains', () => {
+  it('builds colorbalance from lift/gamma/gain wheels', () => {
+    const [f] = colorEqArgs({
+      shadowsRed: 0.2,
+      midtonesGreen: -0.1,
+      highlightsBlue: 0.5,
+      tint: 0.1, // ignored when midtonesGreen is set
+    })
+    expect(f).toContain('colorbalance=')
+    expect(f).toContain('rs=0.200')
+    expect(f).toContain('gm=-0.100')
+    expect(f).toContain('bh=0.500')
+    expect(f).not.toContain('mr=')
+    expect(f).not.toContain('gs=')
+  })
+
+  it('emits vignette and unsharp when set', () => {
+    const args = colorEqArgs({ vignette: 0.6, sharpen: 1.5 })
+    expect(args.some((f) => f.startsWith('vignette=angle='))).toBe(true)
+    expect(args.some((f) => f.startsWith('unsharp=5:5:1.500'))).toBe(true)
+  })
+
+  it('audio chain order: cleanup -> loudnorm -> EQ -> tempo -> volume -> fades -> delay', () => {
+    const parts = audioChainParts({
+      denoise: true,
+      normalize: true,
+      dehum: '50',
+      eqBass: 0.5,
+      eqTreble: -0.25,
+      volume: 1.2,
+      speed: 2,
+      fadeIn: 0.3,
+      fadeOut: 0.4,
+      durationTl: 2,
+      delaySec: 1.25,
+    }).join(',')
+    const idx = (s) => parts.indexOf(s)
+    expect(idx('equalizer=f=50')).toBeGreaterThan(-1)
+    expect(idx('afftdn=nr=12')).toBeGreaterThan(idx('equalizer=f=100'))
+    expect(idx('loudnorm=I=-16')).toBeGreaterThan(idx('afftdn'))
+    expect(idx('bass=g=6.00')).toBeGreaterThan(idx('loudnorm'))
+    expect(idx('treble=g=-3.00')).toBeGreaterThan(idx('bass'))
+    expect(idx('atempo=2.000000')).toBeGreaterThan(idx('treble'))
+    expect(parts.endsWith('adelay=1250|1250')).toBe(true)
+  })
+
+  it('omits optional audio processing by default', () => {
+    const joined = audioChainParts({ speed: 1, delaySec: 0 }).join(',')
+    expect(joined).not.toContain('afftdn')
+    expect(joined).not.toContain('loudnorm')
+    expect(joined).not.toContain('equalizer')
   })
 })

@@ -7,6 +7,8 @@ interface MediaLibraryProps {
   photos: LibraryPhoto[]
   audios: LibraryAudio[]
   convertingVideoId: string | null
+  proxyBusyVideoId: string | null
+  onGenerateProxy: (id: string) => void
   onImportVideos: () => void
   onImportPhotos: () => void
   onImportMusic: () => void
@@ -35,15 +37,19 @@ function metaLine(video: LibraryVideo): string {
 function VideoCard({
   video,
   converting,
+  proxyBusy,
   onAdd,
   onRemove,
   onConvert,
+  onProxy,
 }: {
   video: LibraryVideo
   converting: boolean
+  proxyBusy: boolean
   onAdd: () => void
   onRemove: () => void
   onConvert: () => void
+  onProxy: () => void
 }) {
   return (
     <div className="library-item">
@@ -77,6 +83,14 @@ function VideoCard({
               Convert
             </button>
           )}
+          <button
+            className="btn-tiny"
+            onClick={onProxy}
+            disabled={proxyBusy}
+            title="Generate 480p proxy for smooth preview of high-res footage"
+          >
+            ⚡
+          </button>
           <button className="btn-tiny btn-danger" onClick={onRemove} title="Remove from library">
             ✕
           </button>
@@ -87,7 +101,7 @@ function VideoCard({
 }
 
 export function MediaLibrary(props: MediaLibraryProps) {
-  const { videos, photos, audios, convertingVideoId } = props
+  const { videos, photos, audios, convertingVideoId, proxyBusyVideoId } = props
 
   return (
     <aside className="sidebar">
@@ -107,6 +121,8 @@ export function MediaLibrary(props: MediaLibraryProps) {
                 key={v.id}
                 video={v}
                 converting={convertingVideoId === v.id}
+                proxyBusy={proxyBusyVideoId === v.id}
+                onProxy={() => props.onGenerateProxy(v.id)}
                 onAdd={() => props.onAddVideo(v)}
                 onRemove={() => props.onRemoveVideo(v.id)}
                 onConvert={() => props.onConvertInsv(v.id)}

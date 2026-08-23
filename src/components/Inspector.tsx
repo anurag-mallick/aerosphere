@@ -30,6 +30,9 @@ interface InspectorProps {
   clipPlayhead: number | null
   onUpdateClip: (patch: Partial<TimelineClip>) => void
   onChangeSpeed: (speed: number) => void
+  onCopyGrade: () => void
+  canPasteGrade: boolean
+  onPasteGrade: () => void
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -118,6 +121,40 @@ export function Inspector(props: InspectorProps) {
             <span className="small">Auto-duck under video audio</span>
           </label>
         )}
+        <label className="mini-slider">
+          <span>Bass</span>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            value={Math.round((clip.eqBass ?? 0) * 100)}
+            onChange={(e) => props.onUpdateClip({ eqBass: Number(e.target.value) / 100 })}
+          />
+        </label>
+        <label className="mini-slider">
+          <span>Treble</span>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            value={Math.round((clip.eqTreble ?? 0) * 100)}
+            onChange={(e) => props.onUpdateClip({ eqTreble: Number(e.target.value) / 100 })}
+          />
+        </label>
+        <div className="mini-slider">
+          <span>De-hum</span>
+          <select
+            className="kf-easing"
+            value={clip.dehum ?? 'off'}
+            onChange={(e) =>
+              props.onUpdateClip({ dehum: e.target.value as TimelineClip['dehum'] })
+            }
+          >
+            <option value="off">Off</option>
+            <option value="50">50 Hz (EU)</option>
+            <option value="60">60 Hz (US)</option>
+          </select>
+        </div>
       </div>
     </Row>
   )
@@ -240,6 +277,85 @@ export function Inspector(props: InspectorProps) {
           ))}
         </div>
       </Row>
+
+      <>
+          <Row label="Grade (Lift / Gamma / Gain)">
+            <details className="kf-editor">
+              <summary>RGB wheels</summary>
+              {(
+                [
+                  ['Shadows', 'shadows'],
+                  ['Midtones', 'midtones'],
+                  ['Highlights', 'highlights'],
+                ] as const
+              ).map(([group]) => {
+                const prefix = group.toLowerCase()
+                return (
+                  <div key={group} className="wheel-group">
+                    <span className="inspector-label">{group}</span>
+                    {(['Red', 'Green', 'Blue'] as const).map((c) => (
+                      <label key={c} className="mini-slider">
+                        <span>{c[0]}</span>
+                        <input
+                          type="range"
+                          min={-100}
+                          max={100}
+                          value={Math.round((((ca as unknown as Record<string, number | undefined>)[`${prefix}${c}`]) ?? 0) * 100)}
+                          onChange={(e) =>
+                            props.onUpdateClip({
+                              colorAdjust: {
+                                ...ca,
+                                [`${prefix}${c}`]: Number(e.target.value) / 100,
+                              },
+                            })
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )
+              })}
+            </details>
+          </Row>
+          <Row label="Look FX">
+            <div className="color-sliders">
+              <label className="mini-slider">
+                <span>Vignette</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round((ca.vignette ?? 0) * 100)}
+                  onChange={(e) =>
+                    props.onUpdateClip({ colorAdjust: { ...ca, vignette: Number(e.target.value) / 100 } })
+                  }
+                />
+              </label>
+              <label className="mini-slider">
+                <span>Sharpen</span>
+                <input
+                  type="range"
+                  min={-100}
+                  max={300}
+                  value={Math.round((ca.sharpen ?? 0) * 100)}
+                  onChange={(e) =>
+                    props.onUpdateClip({ colorAdjust: { ...ca, sharpen: Number(e.target.value) / 100 } })
+                  }
+                />
+              </label>
+            </div>
+          </Row>
+          <Row label="Copy grade">
+            <div className="lut-row">
+              <button className="btn-tiny" onClick={props.onCopyGrade}>
+                Copy
+              </button>
+              <button className="btn-tiny" onClick={props.onPasteGrade} disabled={!props.canPasteGrade}>
+                Paste
+              </button>
+            </div>
+          </Row>
+        </>
 
       {clip.kind === 'video' && (
         <>

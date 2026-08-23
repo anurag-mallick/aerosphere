@@ -69,6 +69,40 @@ function registerMediaProtocol() {
         filePath = filePath.replace(/^\/([A-Za-z]:)/, '$1');
       }
 
+      // Robust proxy editing: generate a lightweight 480p sibling so high-res
+// footage (e.g. 5.7K 360° or 4K drone) previews smoothly. The media://
+// handler serves the proxy automatically whenever it exists.
+ipcMain.handle('generate-proxy', async (_event, inputPath) => {
+  const parsed = path.parse(inputPath);
+  const outPath = path.join(parsed.dir, `${parsed.name}.aeroproxy.mp4`);
+  if (fs.existsSync(outPath)) return { ok: true, proxyPath: outPath, existed: true };
+
+  return new Promise((resolve) => {
+    ffmpeg(inputPath)
+      .outputOptions([
+        '-vf', 'scale=-2:480',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-an',
+        '-movflags', '+faststart',
+      ])
+      .on('error', (err) => resolve({ ok: false, error: err.message }))
+      .on('end', () => resolve({ ok: true, proxyPath: outPath }))
+      .save(outPath);
+  });
+});
+
+// Robust proxy editing: transparently serve a sibling
+      // "<name>.aeroproxy.mp4" when one has been generated for the source.
+      const proxyMatch = filePath.match(/^(.*)\.([^.]+)$/);
+      const proxyCandidate =
+        proxyMatch && !filePath.endsWith('.aeroproxy.mp4')
+          ? `${proxyMatch[1]}.aeroproxy.mp4`
+          : null;
+      if (proxyCandidate && fs.existsSync(proxyCandidate)) {
+        filePath = proxyCandidate;
+      }
+
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) {
         return new Response('Not found', { status: 404 });

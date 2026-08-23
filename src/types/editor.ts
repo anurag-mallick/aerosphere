@@ -95,6 +95,20 @@ export interface ClipColorAdjust {
   tint?: number
   /** -1..1 mapped to gamma 1+v */
   gamma?: number
+  /** Lift/Gamma/Gain-style RGB balance (Resolve color wheels) */
+  shadowsRed?: number
+  shadowsGreen?: number
+  shadowsBlue?: number
+  midtonesRed?: number
+  midtonesGreen?: number
+  midtonesBlue?: number
+  highlightsRed?: number
+  highlightsGreen?: number
+  highlightsBlue?: number
+  /** PowerWindow-style vignette strength 0..1 */
+  vignette?: number
+  /** UltraSharpen-inspired: -1 (blur) .. 3 (crisp) */
+  sharpen?: number
 }
 
 export interface TimelineClip {
@@ -143,6 +157,12 @@ export interface TimelineClip {
   audioNormalize?: boolean
   /** music clip: automatically dip under dialogue/video audio */
   duckUnderVideo?: boolean
+  /** audio EQ: bass gain -1..1 (±12 dB) */
+  eqBass?: number
+  /** audio EQ: treble gain -1..1 (±12 dB) */
+  eqTreble?: number
+  /** remove mains hum at 50 or 60 Hz */
+  dehum?: 'off' | '50' | '60'
   /** static quarter-turn rotation applied to this clip only */
   rotate90?: 0 | 90 | 180 | 270
   /** burned-in text overlay (titles à la FCP/Resolve) */
@@ -202,6 +222,9 @@ export interface ExportVisualClip {
   audioDenoise?: boolean
   audioNormalize?: boolean
   rotate90?: 0 | 90 | 180 | 270
+  eqBass?: number
+  eqTreble?: number
+  dehum?: 'off' | '50' | '60'
 }
 
 export interface ExportMusicClip {
@@ -282,6 +305,9 @@ export interface ElectronAPI {
   findSubtitle: (
     videoPath: string
   ) => Promise<{ ok: boolean; srtPath: string | null; error?: string }>
+  generateProxy: (
+    videoPath: string
+  ) => Promise<{ ok: boolean; proxyPath?: string; existed?: boolean; error?: string }>
 
   exportTimeline: (options: ExportTimelineOptions) => Promise<ExportResult>
   cancelExport: () => Promise<{ ok: boolean }>

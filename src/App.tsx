@@ -165,6 +165,7 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [ffmpegVersion, setFfmpegVersion] = useState<string | null>(null)
   const [convertingVideoId, setConvertingVideoId] = useState<string | null>(null)
+  const [proxyBusyVideoId, setProxyBusyVideoId] = useState<string | null>(null)
   const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
@@ -242,9 +243,21 @@ function App() {
   }, [])
 
   const deleteClip = useCallback(
-    (clipId: string) => {
+    (clipId: string, ripple = false) => {
       setTracks((prev) =>
-        prev.map((track) => ({ ...track, clips: track.clips.filter((c) => c.id !== clipId) }))
+        prev.map((track) => {
+          const target = track.clips.find((c) => c.id === clipId)
+          if (!target) return { ...track, clips: track.clips.filter((c) => c.id !== clipId) }
+          if (!ripple) return { ...track, clips: track.clips.filter((c) => c.id !== clipId) }
+          // close the gap: pull later clips on the same track left
+          const removedEnd = target.position + target.duration
+          const shifted = track.clips
+            .filter((c) => c.id !== clipId)
+            .map((c) =>
+              c.position >= removedEnd - 1e-6 ? { ...c, position: Math.max(0, c.position - target.duration) } : c
+            )
+          return { ...track, clips: shifted }
+        })
       )
       setSelectedClipId((current) => (current === clipId ? null : current))
     },
@@ -306,6 +319,32 @@ function App() {
   const inspectorPlayhead = selectedClipInfo
     ? engine.currentTime - selectedClipInfo.clip.position
     : null
+
+  // Resolve-style grade copy/paste (color + log + LUT travel together)
+  const copiedGradeRef = useRef<{
+    colorAdjust?: TimelineClip['colorAdjust']
+    logNormalize?: boolean
+    lutPath?: string
+  } | null>(null)
+  const [hasCopiedGrade, setHasCopiedGrade] = useState(false)
+
+  const copyGrade = useCallback(() => {
+    if (!selectedClipInfo) return
+    const { colorAdjust, logNormalize, lutPath } = selectedClipInfo.clip
+    copiedGradeRef.current = { colorAdjust, logNormalize, lutPath }
+    setHasCopiedGrade(true)
+    setNotice('Grade copied — select another clip and paste.')
+  }, [selectedClipInfo])
+
+  const pasteGrade = useCallback(() => {
+    const grade = copiedGradeRef.current
+    if (!grade || !selectedClipInfo) return
+    updateSelectedClip({
+      colorAdjust: grade.colorAdjust,
+      logNormalize: grade.logNormalize,
+      lutPath: grade.lutPath,
+    })
+  }, [selectedClipInfo, updateSelectedClip])
 
   // --------------------------------------------------------- split at playhead
   const canSplit =
@@ -561,6 +600,23 @@ function App() {
     setAudios((prev) => prev.filter((a) => a.id !== id))
   }, [])
 
+  const generateProxy = useCallback(
+    async (id: string) => {
+      const video = videos.find((v) => v.id === id)
+      if (!video) return
+      setProxyBusyVideoId(id)
+      setError(null)
+      try {
+        const res = await window.electronAPI.generateProxy(video.path)
+        if (!res.ok) setError(`Proxy failed: ${res.error}`)
+        else setNotice(res.existed ? 'Proxy already exists — preview will use it.' : '480p proxy ready — high-res footage now previews smoothly.')
+      } finally {
+        setProxyBusyVideoId(null)
+      }
+    },
+    [videos]
+  )
+
   const convertInsv = useCallback(
     async (id: string) => {
       const video = videos.find((v) => v.id === id)
@@ -621,7 +677,7 @@ function App() {
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedClipId) {
         e.preventDefault()
-        deleteClip(selectedClipId)
+        deleteClip(selectedClipId, e.shiftKey)
       } else if (e.key === 's' || e.key === 'S') {
         e.preventDefault()
         splitSelectedClip()
@@ -711,6 +767,9 @@ function App() {
           audioDenoise: c.audioDenoise,
           audioNormalize: c.audioNormalize,
           rotate90: c.rotate90,
+          eqBass: c.eqBass || 0,
+          eqTreble: c.eqTreble || 0,
+          dehum: c.dehum || 'off',
           logNormalize: c.logNormalize,
           lutPath: c.lutPath,
           subtitlesPath: c.burnSubtitles && c.srtPath ? c.srtPath : null,
@@ -723,6 +782,10 @@ function App() {
           duck: c.duckUnderVideo,
           denoise: c.audioDenoise,
           normalize: c.audioNormalize,
+          eqBass: c.eqBass || 0,
+          eqTreble: c.eqTreble || 0,
+          dehum: c.dehum || 'off',
+          durationTl: c.duration,
         })),
       })
 
@@ -800,6 +863,8 @@ function App() {
           onRemovePhoto={removePhoto}
           onRemoveAudio={removeAudio}
           onConvertInsv={convertInsv}
+          proxyBusyVideoId={proxyBusyVideoId}
+          onGenerateProxy={generateProxy}
         />
 
         <div className="right-column">
@@ -856,6 +921,9 @@ function App() {
           clipPlayhead={inspectorPlayhead}
           onUpdateClip={updateSelectedClip}
           onChangeSpeed={changeSelectedSpeed}
+          onCopyGrade={() => copyGrade()}
+          canPasteGrade={hasCopiedGrade}
+          onPasteGrade={pasteGrade}
         />
       </main>
       </ErrorBoundary>
