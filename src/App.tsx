@@ -167,7 +167,8 @@ function App() {
   const [convertingVideoId, setConvertingVideoId] = useState<string | null>(null)
   const [proxyBusyVideoId, setProxyBusyVideoId] = useState<string | null>(null)
   const [stitchingVideoId, setStitchingVideoId] = useState<string | null>(null)
-  const [exportResolution, setExportResolution] =
+
+const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
   const [exportFormat, setExportFormat] = useState<OutputFormat>('mp4')
@@ -176,6 +177,7 @@ function App() {
   const [exportState, setExportState] = useState<ExportProgress | null>(null)
   const [markers, setMarkers] = useState<TimelineMarker[]>(saved.current?.markers ?? [])
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [dragDepth, setDragDepth] = useState(0)
 
   // ------------------------------------------------------- undo / redo (Cmd+Z)
   const projectSnapshot = useMemo(
@@ -499,10 +501,10 @@ function App() {
   )
 
   // ------------------------------------------------------------------ imports
-  const importVideos = useCallback(async () => {
+  const importVideos = useCallback(async (override?: string[]) => {
     try {
       setError(null)
-      const paths = await pickFiles(VIDEO_FILTERS)
+      const paths = override ?? (await pickFiles(VIDEO_FILTERS))
       if (!paths || paths.length === 0) return
 
       // Insta360 X3 dual-lens pairing: importing EITHER .insv of a pair
@@ -595,8 +597,8 @@ function App() {
             )
           )
         } catch (err) {
-          setVideos((prev) => prev.map((v) => (v.id === item.id ? { ...v, processing: false } : v)))
-          setError(`Could not read ${item.name}: ${(err as Error).message}`)
+          setVideos((prev) => prev.filter((v) => v.id !== item.id))
+          setError(`Skipped ${item.name}: ${(err as Error).message}`)
         }
       }
     } catch (err) {
@@ -605,6 +607,136 @@ function App() {
       setLoadingMessage(null)
     }
   }, [])
+
+  // folder import: recursive scan, then route each media type through the
+  // same pipelines used by manual imports (pairing included for .insv)
+  const importFolder = useCallback(
+    async (dirOverride?: string) => {
+      try {
+        setError(null)
+        let dir = dirOverride
+        if (!dir) {
+          const dirs = await window.electronAPI.openDirectoryDialog()
+          dir = dirs?.[0]
+        }
+        if (!dir) return
+        setLoadingMessage('Scanning folder…')
+        const res = await window.electronAPI.scanFolder(dir)
+        if (!res.ok) throw new Error('scan failed')
+        const total = (res.videos?.length ?? 0) + (res.photos?.length ?? 0) + (res.audios?.length ?? 0)
+        if (total === 0) {
+          setNotice('No supported media found in that folder.')
+          return
+        }
+        if (res.videos?.length) await importVideos(res.videos)
+        if (res.photos?.length) {
+          setPhotos((prev) => [
+            ...prev,
+            ...res.photos.map((p) => ({ id: uid('pho'), name: fileNameOf(p), path: p })),
+          ])
+        }
+        if (res.audios?.length) {
+          const items: LibraryAudio[] = []
+          for (const p of res.audios) {
+            let duration = 0
+            try {
+              duration = (await fetchVideoMetadata(p)).duration
+            } catch {
+              // keep default
+            }
+            items.push({ id: uid('aud'), name: fileNameOf(p), path: p, duration })
+          }
+          setAudios((prev) => [...prev, ...items])
+        }
+        setNotice(`Imported ${total} file${total === 1 ? '' : 's'} from folder.`)
+      } catch (err) {
+        setError(`Folder import failed: ${(err as Error).message}`)
+      } finally {
+        setLoadingMessage(null)
+      }
+    },
+    [importVideos]
+  )
+
+
+  // --------------------------------------------------- drag & drop import
+  const VIDEO_EXTS = ['mp4', 'mov', 'insv', 'webm', 'mkv', 'm4v']
+  const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'heic', 'webp']
+  const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'ogg']
+
+  const importDropped = useCallback(
+    async (paths: string[]) => {
+      try {
+        const vids: string[] = []
+        const phs: string[] = []
+        const auds: string[] = []
+        for (const p of paths) {
+          const ext = p.split('.').pop()?.toLowerCase() ?? ''
+          if (VIDEO_EXTS.includes(ext)) vids.push(p)
+          else if (PHOTO_EXTS.includes(ext)) phs.push(p)
+          else if (AUDIO_EXTS.includes(ext)) auds.push(p)
+          else {
+            // no/unknown extension → treat as a folder and scan it
+            try {
+              const res = await window.electronAPI.scanFolder(p)
+              if (res.ok) {
+                vids.push(...res.videos)
+                phs.push(...res.photos)
+                auds.push(...res.audios)
+              }
+            } catch {
+              // unrecognizable entry — ignore
+            }
+          }
+        }
+        if (vids.length) await importVideos(vids)
+        if (phs.length) {
+          setPhotos((prev) => [...prev, ...phs.map((p2) => ({ id: uid('pho'), name: fileNameOf(p2), path: p2 }))])
+        }
+        if (auds.length) {
+          const items: LibraryAudio[] = []
+          for (const p2 of auds) {
+            let duration = 0
+            try {
+              duration = (await fetchVideoMetadata(p2)).duration
+            } catch {
+              // keep default
+            }
+            items.push({ id: uid('aud'), name: fileNameOf(p2), path: p2, duration })
+          }
+          setAudios((prev) => [...prev, ...items])
+        }
+        const total = vids.length + phs.length + auds.length
+        if (total > 0) setNotice(`Imported ${total} dropped item${total === 1 ? '' : 's'}.`)
+      } catch (err) {
+        setError(`Drop import failed: ${(err as Error).message}`)
+      }
+    },
+    [importVideos]
+  )
+
+  // test/dev hook: automated UI tests drive imports through this
+  useEffect(() => {
+    ;(window as unknown as Record<string, unknown>).__aeroTest = {
+      importFolder: (dir: string) => importFolder(dir),
+      importPathsGrouped: async (paths: string[]) => {
+        const vids = paths.filter((p) => VIDEO_EXTS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
+        const phs = paths.filter((p) => PHOTO_EXTS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
+        const auds = paths.filter((p) => AUDIO_EXTS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
+        if (vids.length) await importVideos(vids)
+        if (phs.length) setPhotos((prev) => [...prev, ...phs.map((p2) => ({ id: uid('pho'), name: fileNameOf(p2), path: p2 }))])
+        if (auds.length) {
+          const items: LibraryAudio[] = []
+          for (const p2 of auds) {
+            let duration = 0
+            try { duration = (await fetchVideoMetadata(p2)).duration } catch {}
+            items.push({ id: uid('aud'), name: fileNameOf(p2), path: p2, duration })
+          }
+          setAudios((prev) => [...prev, ...items])
+        }
+      },
+    }
+  }, [importVideos])
 
   const importPhotos = useCallback(async () => {
     try {
@@ -992,7 +1124,34 @@ function App() {
 
   // -------------------------------------------------------------------- view
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragEnter={(e) => {
+        e.preventDefault()
+        setDragDepth((d) => d + 1)
+      }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={(e) => {
+        e.preventDefault()
+        setDragDepth((d) => Math.max(0, d - 1))
+      }}
+      onDrop={async (e) => {
+        e.preventDefault()
+        setDragDepth(0)
+        const paths = Array.from(e.dataTransfer.files)
+          .map((f) => (f as File & { path?: string }).path)
+          .filter((p): p is string => !!p)
+        if (paths.length === 0) return
+        setLoadingMessage('Importing dropped items…')
+        await importDropped(paths)
+        setLoadingMessage(null)
+      }}
+    >
+      {dragDepth > 0 && (
+        <div className="drop-overlay">
+          <div className="drop-message">⬇ Drop video · photo · audio files or whole folders</div>
+        </div>
+      )}
       <header className="header">
         <div className="header-title">
           <h1>AeroSphere</h1>
@@ -1046,6 +1205,7 @@ function App() {
           onConvertInsv={convertInsv}
           onGenerateProxy={generateProxy}
           proxyBusyVideoId={proxyBusyVideoId}
+          onImportFolder={(dir) => importFolder(dir)}
           onStitchInsv={stitchInsvPair}
           stitchingVideoId={stitchingVideoId}
         />

@@ -81,6 +81,12 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 **Requirements:** [Node.js](https://nodejs.org) ≥ 18 and [ffmpeg](https://ffmpeg.org)
 (`brew install node ffmpeg`)
 
+### Import media
+- **Drag & drop** video / photo / audio files — or entire folders — anywhere onto the window
+- **📁 Import folder…** scans a directory recursively
+- Per-file pickers in each library section
+- Insta360 X3 dual-lens `.insv` pairs auto-merge into one 360° item
+
 ### Launch like a normal app
 Double-click **`AeroSphere.command`** in Finder.
 

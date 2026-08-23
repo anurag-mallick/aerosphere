@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   findSubtitle: (videoPath) => ipcRenderer.invoke('find-subtitle', videoPath),
   generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
   savePng: (dataUrl, defaultName) => ipcRenderer.invoke('save-png', dataUrl, defaultName),
+  scanFolder: (dirPath) => ipcRenderer.invoke('scan-folder', dirPath),
+  openDirectoryDialog: () => ipcRenderer.invoke('open-directory-dialog'),
   findInsvPair: (insvPath) => ipcRenderer.invoke('find-insv-pair', insvPath),
   stitchInsv: (opts) => ipcRenderer.invoke('stitch-insv', opts),
   onStitchProgress: (callback) => {

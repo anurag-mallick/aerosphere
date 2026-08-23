@@ -25,8 +25,8 @@ describe('buildStitchGraph (Insta360 X3 dual-fisheye)', () => {
 describe('findInsvPairName', () => {
   it('matches X3 dual-file naming in both directions', () => {
     const sibs = ['VID_20260808_130327_00_020.insv', 'VID_20260808_130327_10_020.insv']
-    expect(findInsvPairName(sibs[0], sibs)).toBe('vid_20260808_130327_10_020.insv')
-    expect(findInsvPairName(sibs[1], sibs)).toBe('vid_20260808_130327_00_020.insv')
+    expect(findInsvPairName(sibs[0], sibs)).toBe('VID_20260808_130327_10_020.insv')
+    expect(findInsvPairName(sibs[1], sibs)).toBe('VID_20260808_130327_00_020.insv')
   })
   it('returns null when no counterpart exists', () => {
     expect(findInsvPairName('VID_x_00_y.insv', ['VID_x_00_y.insv'])).toBeNull()

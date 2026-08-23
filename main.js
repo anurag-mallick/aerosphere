@@ -295,6 +295,42 @@ ipcMain.handle('convert-insv', async (_event, inputPath) => {
   });
 });
 
+// Multi-file/folder import: recursively collect supported media from a folder
+const MEDIA_EXTENSIONS = {
+  video: ['mp4', 'mov', 'insv', 'webm', 'mkv', 'm4v'],
+  photo: ['jpg', 'jpeg', 'png', 'heic', 'webp'],
+  audio: ['mp3', 'wav', 'm4a', 'aac', 'ogg'],
+};
+
+ipcMain.handle('scan-folder', async (_event, dirPath, maxDepth = 4) => {
+  const out = { ok: true, videos: [], photos: [], audios: [], errors: [] };
+  const walk = (dir, level) => {
+    if (level > maxDepth) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      out.errors.push(`${dir}: ${err.message}`);
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.')) continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        walk(full, level + 1);
+        continue;
+      }
+      const ext = path.extname(ent.name).slice(1).toLowerCase();
+      if (MEDIA_EXTENSIONS.video.includes(ext)) out.videos.push(full);
+      else if (MEDIA_EXTENSIONS.photo.includes(ext)) out.photos.push(full);
+      else if (MEDIA_EXTENSIONS.audio.includes(ext)) out.audios.push(full);
+    }
+  };
+  walk(dirPath, 0);
+  console.log('[scan-folder] result:', out.videos.length, 'videos');
+  return out;
+});
+
 // Robust proxy editing: generate a lightweight 480p sibling so high-res
 // footage (e.g. 5.7K 360° or 4K drone) previews smoothly. The media://
 // handler serves the proxy automatically whenever it exists.

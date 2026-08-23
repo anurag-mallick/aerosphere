@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+const COALESCE_MS = 400
+
 interface HistoryState<T> {
   past: T[]
   future: T[]
   current: T | null
-  lastPush: number
+  lastT: number
 }
 
 function sameRefs<T>(a: T, b: T): boolean {
@@ -19,7 +21,7 @@ export function useProjectHistory<T extends object>(
   current: T,
   applySnapshot: (snap: T) => void
 ) {
-  const hist = useRef<HistoryState<T>>({ past: [], future: [], current: null, lastPush: 0 })
+  const hist = useRef<HistoryState<T>>({ past: [], future: [], current: null, lastT: 0 })
   const [, bump] = useState(0)
 
   useEffect(() => {
@@ -31,15 +33,14 @@ export function useProjectHistory<T extends object>(
     if (sameRefs(current, h.current)) return
 
     const now = Date.now()
-    if (now - h.lastPush < 400 && h.past.length > 0) {
-      h.past[h.past.length - 1] = h.current // coalesce rapid edits
-    } else {
+    if (now - h.lastT > COALESCE_MS) {
+      // new burst: remember the state just before it started
       h.past.push(h.current)
       if (h.past.length > 80) h.past.shift()
+      h.future = []
     }
-    h.future = []
     h.current = current
-    h.lastPush = now
+    h.lastT = now
     bump((v) => v + 1)
   }, [current])
 
@@ -47,7 +48,7 @@ export function useProjectHistory<T extends object>(
     (snap: T) => {
       applySnapshot(snap)
       hist.current.current = snap
-      hist.current.lastPush = 0
+      hist.current.lastT = Date.now()
       bump((v) => v + 1)
     },
     [applySnapshot]

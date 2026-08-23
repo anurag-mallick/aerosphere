@@ -49,8 +49,8 @@ function findInsvPairName(fileName, siblings) {
   const m = /^(.*?)(00|10)([^0-9].*)?\.insv$/i.exec(fileName);
   if (!m) return null;
   const other = m[2] === '00' ? '10' : '00';
-  const wanted = `${m[1]}${other}${m[3] || ''}.insv`.toLowerCase();
-  return siblings.map((s) => s.toLowerCase()).includes(wanted) ? wanted : null;
+  const wanted = `${m[1]}${other}${m[3] || ''}.insv`;
+  return siblings.find((s) => s.toLowerCase() === wanted.toLowerCase()) ?? null;
 }
 
 module.exports = { buildStitchGraph, findInsvPairName };

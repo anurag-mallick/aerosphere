@@ -327,6 +327,9 @@ export interface ElectronAPI {
     dataUrl: string,
     defaultName: string
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
+  scanFolder: (
+    dirPath: string
+  ) => Promise<{ ok: boolean; videos: string[]; photos: string[]; audios: string[] }>
   findInsvPair: (insvPath: string) => Promise<{
     ok: boolean
     pairPath: string | null

@@ -21,6 +21,7 @@ interface MediaLibraryProps {
   onConvertInsv: (id: string) => void
   onStitchInsv: (id: string) => void
   stitchingVideoId: string | null
+  onImportFolder: (dir?: string) => void
 }
 
 function metaLine(video: LibraryVideo): string {
@@ -120,6 +121,9 @@ export function MediaLibrary(props: MediaLibraryProps) {
 
   return (
     <aside className="sidebar">
+      <button className="btn-small folder-import" onClick={() => props.onImportFolder()}>
+        📁 Import folder…
+      </button>
       <section className="media-library">
         <header className="library-header">
           <h2>Videos</h2>

@@ -1264,3 +1264,30 @@ kbd {
 .wheel-group {
   margin-bottom: 0.35rem;
 }
+
+/* drag & drop overlay */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(12, 12, 22, 0.85);
+  border: 3px dashed #e94560;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.drop-message {
+  font-size: 1.1rem;
+  color: #ffd166;
+  background: rgba(10, 10, 18, 0.8);
+  padding: 1rem 2rem;
+  border-radius: 10px;
+}
+
+.folder-import {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
