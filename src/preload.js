@@ -1,0 +1,1 @@
+import { contextBridge, ipcRenderer } from 'electron' contextBridge.exposeInMainWorld('electronAPI', { openFileDialog: (options) => ipcRenderer.invoke('open-file-dialog', options), saveFileDialog: (options) => ipcRenderer.invoke('save-file-dialog', options), openDirectoryDialog: () => ipcRenderer.invoke('open-directory-dialog'), })
