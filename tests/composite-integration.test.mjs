@@ -35,7 +35,8 @@ describe('composite-plan integration (two tracks + gap)', () => {
     ])
     // timeline [0..4): B wins [1..3] (top), A visible [0..1] and [3..4]
     const seq = plan.map(p => p.type === 'black' ? 'black' : p.clip.name)
-    expect(seq).toEqual(['A', 'B', 'A'])
+    // B [2..6] fully covers A's remaining [2..4], so A never re-emerges
+    expect(seq).toEqual(['A', 'B'])
     // no black because A fills the entire timeline
   })
 
