@@ -106,6 +106,44 @@ export function Timeline(props: TimelineProps) {
     }
   }, [playheadX])
 
+  /** other clips on this track as sorted [start,end) intervals */
+  const overlapIntervals = (track: TimelineTrack, excludeId: string) =>
+    track.clips
+      .filter((c) => c.id !== excludeId)
+      .map((c) => ({ start: c.position, end: c.position + c.duration }))
+      .sort((a, b) => a.start - b.start)
+
+  /**
+   * Nearest non-overlapping position for a candidate [pos, pos+dur):
+   * if it collides with an interval, snap to whichever side is closer.
+   * Repeats until stable so cascades across multiple neighbors settle.
+   */
+  const clampToFreePosition = (
+    pos: number,
+    dur: number,
+    intervals: { start: number; end: number }[]
+  ): number => {
+    let p = Math.max(0, pos)
+    for (let pass = 0; pass < 3; pass++) {
+      let collided = false
+      for (const o of intervals) {
+        if (p < o.end - 1e-6 && p + dur > o.start + 1e-6) {
+          const leftOption = o.start - dur
+          const rightOption = o.end
+          const leftValid = leftOption >= 0
+          const rightValid = true
+          const goLeft =
+            leftValid &&
+            (!rightValid || Math.abs(leftOption - p) <= Math.abs(rightOption - p))
+          p = goLeft ? Math.max(0, leftOption) : rightOption
+          collided = true
+        }
+      }
+      if (!collided) break
+    }
+    return Math.max(0, p)
+  }
+
   const beginDrag = useCallback(
     (event: React.PointerEvent, clip: TimelineClip, track: TimelineTrack, mode: DragMode) => {
       event.stopPropagation()
@@ -136,14 +174,28 @@ export function Timeline(props: TimelineProps) {
         const trackState = state.track
 
         if (state.mode === 'move') {
-          const next = snapTo(snaps, Math.max(0, state.origPosition + deltaSec), state.pps)
-          onUpdateClip(trackState.id, o.id, { position: Math.max(0, next) })
+          const snapped = snapTo(snaps, Math.max(0, state.origPosition + deltaSec), state.pps)
+          const freePos = clampToFreePosition(
+            Math.max(0, snapped),
+            o.duration,
+            overlapIntervals(trackState, o.id)
+          )
+          onUpdateClip(trackState.id, o.id, { position: freePos })
           return
         }
 
         if (state.mode === 'trim-end') {
-          const limit =
+          const sourceLimit =
             o.kind === 'photo' ? MAX_PHOTO_DUR : Math.max(MIN_CLIP_DUR, o.sourceDuration - o.trimIn)
+          // never extend past the next clip on this track
+          const rightNeighborStart = overlapIntervals(trackState, o.id)
+            .map((iv) => iv.start)
+            .filter((start) => start >= o.position + MIN_CLIP_DUR - 1e-6)
+            .sort((a, b) => a - b)[0]
+          const neighborLimit =
+            rightNeighborStart !== undefined ? rightNeighborStart - o.position : Infinity
+          const limit = Math.min(sourceLimit, neighborLimit)
+          if (limit < MIN_CLIP_DUR) return
           const duration = clamp(
             snapTo([o.position + o.duration], state.origDuration + deltaSec, state.pps) - o.position,
             MIN_CLIP_DUR,
@@ -162,10 +214,15 @@ export function Timeline(props: TimelineProps) {
         )
         if (upper <= lower) return
         const shift = clamp(deltaSec, lower, upper)
-        const newPosition = snapTo(snaps, state.origPosition + shift, state.pps)
-        const appliedShift = newPosition - state.origPosition
+        const candDuration = state.origDuration - shift
+        const candPosition = clampToFreePosition(
+          Math.max(0, snapTo(snaps, state.origPosition + shift, state.pps)),
+          candDuration,
+          overlapIntervals(trackState, o.id)
+        )
+        const appliedShift = candPosition - state.origPosition
         onUpdateClip(trackState.id, o.id, {
-          position: newPosition,
+          position: candPosition,
           trimIn: state.origTrimIn + appliedShift,
           duration: state.origDuration - appliedShift,
         })
