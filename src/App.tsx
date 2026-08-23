@@ -108,11 +108,19 @@ function App() {
   const [exportState, setExportState] = useState<ExportProgress | null>(null)
 
   // ------------------------------------------------------------------ persist
+  const storageWarnRef = useRef(false)
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ videos, photos, audios, tracks }))
+      storageWarnRef.current = false
     } catch {
-      // storage quota exceeded (large thumbnails) - non-fatal
+      // surface quota failures once per failure streak instead of every save
+      if (!storageWarnRef.current) {
+        storageWarnRef.current = true
+        setError(
+          'Project couldn’t be saved (storage full) — remove some thumbnails or media.'
+        )
+      }
     }
   }, [videos, photos, audios, tracks])
 
