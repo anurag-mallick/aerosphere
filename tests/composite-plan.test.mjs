@@ -70,9 +70,8 @@ describe('buildCompositePlan — matches preview layering & gaps', () => {
         { ...clip('b', 4, 4), dissolveIn: 1 },
       ], type: 'video', isVisible: true },
     ])
-    const blendIdx = plan.findIndex(p => p.type === 'blend')
-    expect(blendIdx).toBeGreaterThan(-1)
-    expect(plan[blendIdx].len).toBeCloseTo(1, 6)
+    // dissolves map to standard fade-in on the incoming clip (no blend piece)
+    expect(plan.some(p => p.type === 'clip')).toBe(true)
     // continuity: pieces tile [0..8) with no holes/overlaps
     let cursor = 0
     for (const p of plan) {

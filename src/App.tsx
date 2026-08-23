@@ -185,14 +185,15 @@ const [exportResolution, setExportResolution] =
 
   // ------------------------------------------------------- undo / redo (Cmd+Z)
   const projectSnapshot = useMemo(
-    () => ({ videos, photos, audios, tracks }),
-    [videos, photos, audios, tracks]
+    () => ({ videos, photos, audios, tracks, markers }),
+    [videos, photos, audios, tracks, markers]
   )
   const applySnapshot = useCallback((snap: typeof projectSnapshot) => {
     setVideos(snap.videos)
     setPhotos(snap.photos)
     setAudios(snap.audios)
     setTracks(snap.tracks)
+    setMarkers(snap.markers)
   }, [])
   const { undo, redo, canUndo, canRedo } = useProjectHistory(projectSnapshot, applySnapshot)
 

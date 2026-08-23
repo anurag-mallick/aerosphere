@@ -159,9 +159,29 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     clearedOnClose = false;
   });
-  const clearProjectAndClose = () => {
+  const clearProjectAndClose = async () => {
     if (clearedOnClose) return;
     clearedOnClose = true;
+    let hasContent = false;
+    try {
+      hasContent = !!(await mainWindow.webContents.executeJavaScript(
+        '(function(){try{const p=JSON.parse(localStorage.getItem("ve:v1:project")||"null");return !!p&&(p.videos.length>0||p.photos.length>0||p.audios.length>0||p.tracks.some(t=>t.clips.length>0))}catch(e){return false}})()'
+      ));
+    } catch { hasContent = false; }
+    if (hasContent) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        buttons: ['Discard Project', 'Cancel'],
+        defaultId: 1,
+        title: 'Unsaved Work',
+        message: 'Closing AeroSphere will discard this project.',
+        detail: 'Your timeline, library and edits will not be saved. Continue?',
+      });
+      if (response !== 0) {
+        clearedOnClose = false;
+        return;
+      }
+    }
     mainWindow.webContents
       .executeJavaScript(
         `(function(){try{Object.keys(localStorage).filter(function(k){return k.indexOf('ve:')===0}).forEach(function(k){localStorage.removeItem(k)})}catch(e){}})();'ok'`
