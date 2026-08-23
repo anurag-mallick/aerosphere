@@ -14,6 +14,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { buildReframePlan } = require('./keyframe-filter');
 const { resolveBinary, probeFile, extractMetadata } = require('./src-shared/ffmpeg-utils');
+const { buildCompositePlan } = require('./composite-plan');
 
 let activeProcess = null;
 let cancelled = false;
@@ -478,7 +479,9 @@ function checkCancelled() {
 async function runExport(options) {
   const { outputPath, width, height, fps } = options;
   const outSpec = outputSpec(options.format);
-  const visualClips = Array.isArray(options.visualClips) ? options.visualClips : [];
+  const videoTracks = Array.isArray(options.videoTracks) ? options.videoTracks : [];
+  const visualClips = videoTracks.flatMap((t) => t.clips);
+  const visibleVideoTracks = videoTracks.filter((t) => t.isVisible);
   const musicClips = (Array.isArray(options.musicClips) ? options.musicClips : []).filter((m) => m && m.path);
   const onProgress = options.onProgress || (() => {});
 
@@ -520,10 +523,13 @@ async function runExport(options) {
 
   try {
     // ------------------------------------------------------- render segments
-    const pieces = expandTimelinePieces(visualClips);
+    // buildCompositePlan mirrors findVisualAt(): respects layering (later
+    // track wins), real gaps become black filler, dissolves create blends.
+    const pieces = buildCompositePlan(visibleVideoTracks);
     const segPaths = [];
     const totalUnitsEstimate = Math.max(1, pieces.reduce((n, piece) => {
       if (piece.type === 'blend') return n + 1;
+      if (piece.type === 'black') return n + 1;
       const planSpans = buildReframePlan({
         is360: !!piece.clip.is360,
         projection: piece.clip.projection,
@@ -545,12 +551,14 @@ async function runExport(options) {
     // per-clip stabilization tables + audio flags (collected up front)
     const stabByClipId = new Map();
     const audioFlagsById = new Map();
+    const renderPathByClipId = new Map();
     for (let ci = 0; ci < visualClips.length; ci++) {
       const clip = visualClips[ci];
       if (clip.kind !== 'video') continue;
       const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
 
       const renderPath = clip.pairedPath ? await combinedSourceFor(clip) : clip.path;
+      renderPathByClipId.set(clip.id, renderPath);
 
       if (clip.stabilize && !clip.is360) {
         checkCancelled();
@@ -607,6 +615,22 @@ async function runExport(options) {
 
     for (const piece of pieces) {
       checkCancelled();
+
+      if (piece.type === 'black') {
+        checkCancelled();
+        const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
+        await runFfmpeg([
+          '-f', 'lavfi',
+          '-i', `color=c=black:s=${width}x${height}:r=${fps}`,
+          '-t', String(piece.len),
+          '-an',
+          ...videoCodecArgs('h264'),
+          segPath,
+        ]);
+        markDone(`Black filler (${piece.len.toFixed(1)}s)`);
+        segPaths.push(segPath);
+        continue;
+      }
 
       if (piece.type === 'blend') {
         const { prevClip, clip, startTl, len } = piece;
@@ -736,7 +760,7 @@ async function runExport(options) {
         await runFfmpeg([
           '-ss', String(Math.max(0, span.ss)),
           '-t', String(span.dur),
-          '-i', renderPath,
+          '-i', renderPathByClipId.get(piece.clip.id) ?? piece.clip.path,
           '-an',
           '-vf', vfParts.join(','),
           ...videoCodecArgs('h264'),

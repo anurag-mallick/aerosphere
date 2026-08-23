@@ -1202,7 +1202,8 @@ const [exportResolution, setExportResolution] =
         height: preset.height,
         fps: exportFps,
         format: exportFormat,
-        visualClips: visualClips.map((c) => ({
+        videoTracks: videoTracksList.filter(t => t.isVisible).map(t => ({
+          clips: t.clips.map((c) => ({
           kind: c.kind === 'photo' ? ('photo' as const) : ('video' as const),
           path: c.path,
           position: c.position,
@@ -1233,6 +1234,7 @@ const [exportResolution, setExportResolution] =
           logNormalize: c.logNormalize,
           lutPath: c.lutPath,
           subtitlesPath: c.burnSubtitles && c.srtPath ? c.srtPath : null,
+          })),
         })),
         musicClips: musicClips.map((c) => ({
           path: c.path,

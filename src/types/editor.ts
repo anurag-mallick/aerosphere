@@ -270,6 +270,10 @@ export interface ExportMusicClip {
 
 export type OutputFormat = 'mp4' | 'mp4-hevc' | 'webm' | 'mov' | 'prores'
 
+export interface ExportVideoTrack {
+  clips: ExportVisualClip[]
+}
+
 export interface ExportTimelineOptions {
   outputPath: string
   width: number
@@ -277,7 +281,8 @@ export interface ExportTimelineOptions {
   fps: number
   /** output container + codec family */
   format?: OutputFormat
-  visualClips: ExportVisualClip[]
+  /** full track array in top-to-bottom stacking order */
+  videoTracks: ExportVideoTrack[]
   musicClips: ExportMusicClip[]
 }
 
