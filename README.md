@@ -45,25 +45,34 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 **Requirements:** [Node.js](https://nodejs.org) ≥ 18 and [ffmpeg](https://ffmpeg.org)
 (`brew install node ffmpeg`)
 
-### One-click launcher
+### Launch like a normal app
 Double-click **`AeroSphere.command`** in Finder.
-On first run it installs dependencies, checks ffmpeg and opens the app.
+
+- **First run:** it installs dependencies, builds a native
+  **`AeroSphere.app`**, and opens it — then closes the Terminal.
+- **Every run after:** the `.app` opens instantly, no Terminal involved.
+
+Once built you'll find the real application at
+`release/mac-arm64/AeroSphere.app` — feel free to drag it into
+`/Applications` or your Dock and delete nothing else; the launcher will
+keep finding it.
 
 ### From the terminal
 ```bash
-./start.sh          # installs deps if needed, then launches
+./start.sh          # developer mode: vite dev server + electron together
 ```
 
-Or run the pieces manually:
+Manual commands:
 ```bash
 npm install         # once
-npm run dev         # vite dev server + electron together
+npm run dev         # dev mode (hot reload)
 npm run build       # production renderer bundle
-npm run package     # distributable via electron-builder
+npm run package:mac # build release/mac-arm64/AeroSphere.app
+npm run package     # full distributable (.dmg)
 ```
 
-> Windows/Linux: `npm run dev` works anywhere Node + ffmpeg exist; `.command`
-> launcher is macOS-specific.
+> Windows/Linux: `npm run dev` works anywhere Node + ffmpeg exist;
+> `AeroSphere.command` and the `.app` bundle are macOS-specific.
 
 ---
 
