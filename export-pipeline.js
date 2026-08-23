@@ -124,9 +124,26 @@ function logNormalizeArgs(enabled) {
   return [`curves=all='0/0.02 0.125/0.14 0.25/0.30 0.5/0.55 0.75/0.80 1/1'`];
 }
 
-function lutArgs(lutPath) {
-  if (!lutPath) return [];
-  return [`lut3d=file=${lutPath}`];
+function lutArgs(lutFile) {
+  // `lutFile` must already be a colon-free RELATIVE name (see copyLutToWorkDir)
+  if (!lutFile) return [];
+  return [`lut3d=file=${lutFile}`];
+}
+
+/**
+ * Copy a user-supplied .cube LUT into the export workDir under a generated
+ * colon-free name. Windows drive letters (C:\…) would otherwise break
+ * ffmpeg's filtergraph parser. Returns the bare filename or null.
+ */
+function copyLutToWorkDir(lutPath, clipIndex, workDir) {
+  if (!lutPath) return null;
+  const dest = path.join(workDir, `lut-${clipIndex}.cube`);
+  try {
+    fs.copyFileSync(lutPath, dest);
+    return path.basename(dest);
+  } catch {
+    return null;
+  }
 }
 
 /** video fade in/out, timed relative to the START of the given span */
@@ -284,13 +301,14 @@ async function runExport(options) {
       report((doneSpans / totalSpansEstimate) * SEGMENT_WEIGHT, stage);
 
       const colorFilters = colorEqArgs(clip.colorAdjust);
+      const safeLut = copyLutToWorkDir(clip.lutPath, ci, workDir);
       let stabTransform = null;
 
       if (clip.kind === 'photo') {
         const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
         const vf = [
           ...logNormalizeArgs(clip.logNormalize),
-          ...lutArgs(clip.lutPath),
+          ...lutArgs(safeLut),
           ...colorFilters,
           ...videoFadeArgs(clip, 0, clip.duration, clip.duration),
           `fps=${fps}`,
@@ -352,7 +370,7 @@ async function runExport(options) {
         const vfParts = [
           ...(stabTransform ? [stabTransform] : []),
           ...logNormalizeArgs(clip.logNormalize),
-          ...lutArgs(clip.lutPath),
+          ...lutArgs(safeLut),
           ...(span.filter ? [span.filter] : []),
           ...colorFilters,
           ...videoFadeArgs(clip, segStartTl, segDurTl, clip.duration),
