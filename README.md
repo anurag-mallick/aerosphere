@@ -36,11 +36,24 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 - Project persistence + schema versioning/migrations
 - Crash-safe UI: an error boundary keeps one bad panel from white-screening the editor
 
+### Color grading (Resolve Color-page inspired)
+- **Lift / Gamma / Gain RGB wheels** — 9-parameter shadows/midtones/highlights balance
+- **Vignette** and **sharpen/blur** look sliders
+- **Copy/paste grade** — carry color + log normalization + LUT between clips
+- Gamma, temperature, tint, brightness, contrast, saturation
+- D-Log M normalization and custom `.cube` LUTs
+
 ### Audio suite (Fairlight/Voice-Isolation inspired)
 - **Voice isolation** — FFmpeg noise reduction for windy drone audio
 - **Loudness normalization** to −16 LUFS broadcast standard
 - **Music auto-ducking** — music automatically dips under dialogue via sidechain compression
+- **3-band style EQ** — bass/treble shelves ±12 dB
+- **De-hummer** — 50 Hz / 60 Hz mains removal
 - Any number of audio tracks playing simultaneously
+
+### Proxy editing (Edit page inspired)
+- One-click **⚡ proxy generation** (480p H.264 sibling file)
+- The player transparently serves the proxy whenever it exists — smooth scrubbing of 5.7K/4K footage on modest machines; exports always use the original media
 
 ### Export & delivery
 - **Delivery presets** — YouTube 1080p/4K/Shorts, Instagram Feed 4:5 / Reels / Square, Facebook Feed/Reels, cinematic master, H.265 archive
