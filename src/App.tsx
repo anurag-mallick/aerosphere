@@ -30,6 +30,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { useProjectHistory } from './hooks/useProjectHistory'
 import { fileNameOf, formatTime, uid, clamp } from './utils/format'
 import { interpolateChannel, computeViewRect, type ViewRect } from './utils/keyframes'
+import { detect360Projection } from './utils/detect360'
 
 const STORAGE_KEY = 've:v1:project'
 
@@ -461,6 +462,7 @@ const [exportResolution, setExportResolution] =
         sourceDuration: video.duration || 5,
         speed: 1,
         is360: video.is360 ?? false,
+        projection: video.projection,
         equirect: video.equirect ?? false,
         keyframes: [],
         volume: 1,
@@ -560,9 +562,8 @@ const [exportResolution, setExportResolution] =
         try {
           const metadata = await fetchVideoMetadata(item.path)
           const thumbnail = await fetchThumbnail(item.path, Math.min(1.2, (metadata.duration || 2) * 0.1))
-          const is360 =
-            item.format === 'insv' ||
-            (metadata.width > 0 && metadata.height > 0 && metadata.width / metadata.height > 1.9 && metadata.width / metadata.height < 2.15)
+          const det = detect360Projection(item.path, metadata.width, metadata.height)
+          const is360 = det.is360
           let pairPath: string | null = null
           let lrvPath: string | null = null
           if (item.format === 'insv') {
@@ -585,6 +586,7 @@ const [exportResolution, setExportResolution] =
                     duration: metadata.duration,
                     thumbnail,
                     is360,
+                    projection: det.projection,
                     pairPath,
                     lrvPath,
                     metadata: {
@@ -1085,6 +1087,7 @@ const [exportResolution, setExportResolution] =
           duration: c.duration,
           speed: c.speed,
           is360: c.is360,
+          projection: c.projection,
           lensFov: c.lensFov,
           keyframes: (c.keyframes ?? []).map((k) => ({ ...k })),
           colorAdjust: c.colorAdjust,

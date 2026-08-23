@@ -503,6 +503,7 @@ async function runExport(options) {
       if (piece.type === 'blend') return n + 1;
       const planSpans = buildReframePlan({
         is360: !!piece.clip.is360,
+        projection: piece.clip.projection,
         lensFov: piece.clip.lensFov,
         width: piece.type === 'clip' ? rotatedDims(piece.clip.rotate90, width, height).w : width,
         height: piece.type === 'clip' ? rotatedDims(piece.clip.rotate90, width, height).h : height,
@@ -677,6 +678,7 @@ async function runExport(options) {
       const plan = buildReframePlan({
         is360: !!clip.is360,
         equirect: !!clip.equirect,
+        projection: clip.projection,
         lensFov: clip.lensFov,
         width: dims.w,
         height: dims.h,

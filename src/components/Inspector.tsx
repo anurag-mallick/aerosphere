@@ -543,6 +543,27 @@ export function Inspector(props: InspectorProps) {
       {clip.kind === 'video' && (
         <Section icon="🌐" title="360° Reframe & Keyframes">
           {is360 && (
+            <Row label="Source layout">
+              <div className="speed-picker">
+                {(['dfisheye', 'equirect'] as const).map((proj) => (
+                  <button
+                    key={proj}
+                    className={`btn-tiny ${(clip.projection ?? 'dfisheye') === proj ? 'active' : ''}`}
+                    onClick={() => props.onUpdateClip({ projection: proj })}
+                    title={
+                      proj === 'dfisheye'
+                        ? 'Raw dual-lens .insv frames'
+                        : 'Pre-stitched 2:1 equirectangular video'
+                    }
+                  >
+                    {proj === 'dfisheye' ? 'Dual-fisheye' : 'Equirect'}
+                  </button>
+                ))}
+              </div>
+            </Row>
+          )}
+
+          {is360 && (
             <Row label="Lens FOV">
               <div className="lensfov-row">
                 <input

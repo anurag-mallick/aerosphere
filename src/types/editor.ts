@@ -7,6 +7,8 @@ export interface MediaMetadataInfo {
   hasAudio?: boolean
   /** true for dual-fisheye/equirectangular 360 sources */
   is360?: boolean
+  /** how the raw frames are laid out — drives v360 input selection */
+  projection?: 'dfisheye' | 'equirect'
 }
 
 export interface LibraryVideo {
@@ -20,6 +22,7 @@ export interface LibraryVideo {
   processing?: boolean
   converting?: boolean
   is360?: boolean
+  projection?: 'dfisheye' | 'equirect'
   /** stitched equirectangular (vs raw dual-fisheye .insv) */
   equirect?: boolean
   /** sibling lens file for dual-fisheye .insv pairs */
@@ -135,6 +138,8 @@ export interface TimelineClip {
   speed?: number
   /** dual-fisheye / equirectangular source -> reframe with v360 instead of crop */
   is360?: boolean
+  /** frame layout of this 360° source */
+  projection?: 'dfisheye' | 'equirect'
   /** source is already-stitched equirectangular footage */
   equirect?: boolean
   /** source lens FOV used when converting dual-fisheye input */
@@ -220,6 +225,7 @@ export interface ExportVisualClip {
   speed?: number
   is360?: boolean
   equirect?: boolean
+  projection?: 'dfisheye' | 'equirect'
   lensFov?: number
   keyframes?: TimelineClip['keyframes']
   colorAdjust?: ClipColorAdjust

@@ -101,3 +101,35 @@ describe('static filters render through real ffmpeg', () => {
     expect(fs.existsSync(out)).toBe(true)
   }, 30000)
 })
+
+describe('360 source projection selection', () => {
+  const kf = [
+    { time: 0, pan: 0, tilt: 0, roll: 0, fov: 90, easing: 'ease' },
+    { time: 2, pan: 45, tilt: 10, roll: 0, fov: 80, easing: 'linear' },
+  ]
+
+  it('raw .insv style sources use the dfisheye input', () => {
+    const plan = buildReframePlan({ is360: true, projection: 'dfisheye', lensFov: 220, width: 640, height: 360, duration: 2 })
+    expect(plan.spans[0].filter).toContain('v360=dfisheye:e:id_fov=')
+  })
+
+  it('pre-stitched equirectangular sources use the equirect input (no id_fov)', () => {
+    const plan = buildReframePlan({ is360: true, projection: 'equirect', width: 640, height: 360, duration: 2 })
+    expect(plan.spans[0].filter).toMatch(/v360=e:e(:yaw|=)/)
+    expect(plan.spans[0].filter).not.toContain('id_fov=')
+    expect(plan.spans[0].filter).not.toContain('dfisheye')
+  })
+
+  it('animated keyframed filters keep the chosen input token', () => {
+    const dfish = buildReframePlan({ is360: true, projection: 'dfisheye', lensFov: 210, width: 320, height: 180, keyframes: kf, duration: 2 })
+    const eqr = buildReframePlan({ is360: true, projection: 'equirect', width: 320, height: 180, keyframes: kf, duration: 2 })
+    expect(dfish.spans[0].filter).toContain('v360=dfisheye:e:')
+    expect(eqr.spans[0].filter).toContain('v360=e:e:')
+    expect(eqr.spans[0].filter).not.toContain('id_fov')
+  })
+
+  it('defaults to dfisheye when projection omitted (back-compat)', () => {
+    const plan = buildReframePlan({ is360: true, lensFov: 220, width: 320, height: 180, duration: 1 })
+    expect(plan.spans[0].filter).toContain('v360=dfisheye:e:id_fov=220')
+  })
+})

@@ -53,6 +53,15 @@ function sampleChannel(kfs, t, name) {
 function reframeFilterAt(opts, pan, tilt, roll, fov) {
   const { is360, width, height, lensFov } = opts;
   if (is360) {
+    // 'dfisheye' = raw dual-lens frames (.insv); 'equirect' = pre-stitched 2:1
+    if (opts.projection === 'equirect') {
+      return (
+        `v360=e:e` +
+        `:yaw=${pan.toFixed(4)}:pitch=${tilt.toFixed(4)}:roll=${roll.toFixed(4)}` +
+        `:d_fov=${clamp(fov, 20, 140).toFixed(3)}` +
+        `:w=${width}:h=${height}`
+      );
+    }
     const lf = clamp(lensFov || 220, 120, 300);
     return (
       `v360=dfisheye:e:id_fov=${lf.toFixed(3)}` +
@@ -80,7 +89,7 @@ function reframeFilterAt(opts, pan, tilt, roll, fov) {
  * Build the reframing render plan for one visual clip.
  *
  * opts: {
- *   is360, lensFov?, width, height,
+ *   is360, projection?: 'dfisheye'|'equirect', lensFov?, width, height,
  *   keyframes?: [{time(sec timeline-relative), pan, tilt, roll, fov, easing}],
  *   trimIn, duration(timeline sec), speed, fps,
  * }
@@ -96,7 +105,7 @@ function buildReframePlan(opts) {
   if (!usable) {
     // no animation - single static span (or no filter at all for flat)
     const filter = opts.is360
-      ? reframeFilterAt({ ...opts, keyframes: null }, 0, 0, 0, 90)
+      ? reframeFilterAt(opts, 0, 0, 0, 90)
       : '';
     return { spans: [{ ss: trimIn, dur: spanSource, filter }], hasReframing: !!opts.is360 };
   }
