@@ -80,7 +80,48 @@ function videoCodecArgs(codec) {
   if (codec === 'h265' || codec === 'hevc') {
     return ['-c:v', 'libx265', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
   }
+  if (codec === 'prores') {
+    // editing master — 10-bit 4:2:2, PCM audio in MOV
+    return ['-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le', '-c:a', 'pcm_s16le'];
+  }
   return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p'];
+}
+
+/** extension + audio codec for a requested output format */
+function outputSpec(format) {
+  switch (format) {
+    case 'webm':
+      return { ext: 'webm', videoCodec: 'vp9', audioArgs: ['-c:a', 'libopus', '-b:a', '160k'] };
+    case 'mov':
+      return { ext: 'mov', videoCodec: 'h264', audioArgs: ['-c:a', 'aac', '-b:a', '192k'] };
+    case 'prores':
+      return { ext: 'mov', videoCodec: 'prores', audioArgs: ['-c:a', 'pcm_s16le'] };
+    case 'mp4-hevc':
+      return { ext: 'mp4', videoCodec: 'h265', audioArgs: ['-c:a', 'aac', '-b:a', '192k'] };
+    default:
+      return { ext: 'mp4', videoCodec: 'h264', audioArgs: ['-c:a', 'aac', '-b:a', '192k'] };
+  }
+}
+
+/**
+ * Pure arg-builder for the final container conversion.
+ * Returns null when the internal mp4 can be used as-is (plain copy).
+ */
+function buildFinalizeArgs(spec, input, output) {
+  if (spec.ext === 'mp4') {
+    // internal pipeline is already mp4/h264 or mp4/hevc with aac — just copy
+    return { args: ['-i', input, '-c', 'copy', output], reencode: false };
+  }
+  const videoArgs =
+    spec.videoCodec === 'vp9'
+      ? ['-c:v', 'libvpx-vp9', '-crf', '34', '-b:v', '0', '-row-mt', '1', '-pix_fmt', 'yuv420p']
+      : spec.videoCodec === 'prores'
+        ? ['-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le']
+        : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p'];
+  return {
+    args: ['-i', input, ...videoArgs, ...spec.audioArgs, '-movflags', '+faststart', output],
+    reencode: true,
+  };
 }
 
 /** atempo accepts 0.5..2.0 per instance - chain for extreme speeds */
@@ -309,7 +350,8 @@ function checkCancelled() {
  * options: { outputPath, width, height, fps, codec, visualClips[], musicClips[], onProgress(percent, stage) }
  */
 async function runExport(options) {
-  const { outputPath, width, height, fps, codec = 'h264' } = options;
+  const { outputPath, width, height, fps } = options;
+  const outSpec = outputSpec(options.format);
   const visualClips = Array.isArray(options.visualClips) ? options.visualClips : [];
   const musicClips = (Array.isArray(options.musicClips) ? options.musicClips : []).filter((m) => m && m.path);
   const onProgress = options.onProgress || (() => {});
@@ -382,7 +424,7 @@ async function runExport(options) {
           '-an',
           '-vf', vf,
           '-t', String(clip.duration),
-          ...videoCodecArgs(codec),
+          ...videoCodecArgs('h264'),
           segPath,
         ], { duration: clip.duration, onProgress: undefined });
         doneSpans += 1;
@@ -450,7 +492,7 @@ async function runExport(options) {
           '-i', clip.path,
           '-an',
           '-vf', vfParts.join(','),
-          ...videoCodecArgs(codec),
+          ...videoCodecArgs('h264'),
           segPath,
         ]);
         doneSpans += 1;
@@ -591,7 +633,7 @@ async function runExport(options) {
         args.push(
           '-vf',
           `subtitles=${subtitleFile}:force_style='FontSize=15,PrimaryColour=&H00FFFFFF&,OutlineColour=&H66000000&,BorderStyle=1,Shadow=0,MarginV=14'`,
-          ...videoCodecArgs(codec),
+          ...videoCodecArgs('h264'),
         );
       } else {
         args.push('-c:v', 'copy');
@@ -605,8 +647,15 @@ async function runExport(options) {
       await runFfmpeg(args, { duration: undefined, onProgress: undefined, cwd: workDir });
     }
 
+    // ---------------------------------------------------- final container
     checkCancelled();
-    fs.copyFileSync(finalPath, outputPath);
+    if (outSpec.ext === 'mp4') {
+      fs.copyFileSync(finalPath, outputPath);
+    } else {
+      onProgress(99, `Writing ${String(outSpec.ext).toUpperCase()} file`);
+      const fin = buildFinalizeArgs(outSpec, finalPath, outputPath);
+      await runFfmpeg(fin.args);
+    }
     onProgress(100, 'Done');
     return { ok: true, cancelled: false, outputPath };
   } catch (err) {
@@ -638,4 +687,6 @@ module.exports = {
   serializeSrt,
   buildTimelineSubtitles,
   clamp,
+  outputSpec,
+  buildFinalizeArgs,
 };

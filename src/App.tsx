@@ -5,6 +5,7 @@ import type {
   LibraryAudio,
   LibraryPhoto,
   LibraryVideo,
+  OutputFormat,
   TimelineClip,
   TimelineMarker,
   TimelineTrack,
@@ -44,6 +45,7 @@ const RESOLUTION_PRESETS: Record<string, { label: string; width: number; height:
   '2160': { label: '3840 × 2160 (4K UHD)', width: 3840, height: 2160 },
   v720: { label: '720 × 1280 (Vertical HD)', width: 720, height: 1280 },
   v1080: { label: '1080 × 1920 (Vertical FHD)', width: 1080, height: 1920 },
+  ig45: { label: '1080 × 1350 (Instagram Feed 4:5)', width: 1080, height: 1350 },
   sq1080: { label: '1080 × 1080 (Square)', width: 1080, height: 1080 },
   cine: { label: '1920 × 804 (Cinematic 2.39:1)', width: 1920, height: 804 },
 }
@@ -57,13 +59,43 @@ const RESOLUTION_GROUPS: { label: string; keys: string[] }[] = [
 
 const FPS_OPTIONS = [24, 25, 30, 50, 60]
 
-const DELIVERY_PRESETS: { name: string; res: keyof typeof RESOLUTION_PRESETS; fps: 24 | 25 | 30 | 50 | 60; codec: 'h264' | 'h265' }[] = [
-  { name: 'YouTube / Web — 1080p', res: '1080', fps: 30, codec: 'h264' },
-  { name: 'YouTube / Web — 4K', res: '2160', fps: 30, codec: 'h265' },
-  { name: 'Instagram Reels / TikTok', res: 'v1080', fps: 30, codec: 'h264' },
-  { name: 'Square feed post', res: 'sq1080', fps: 30, codec: 'h264' },
-  { name: 'Cinematic master — 2.39:1 @ 24p', res: 'cine', fps: 24, codec: 'h265' },
-  { name: 'Archive master (best quality)', res: '2160', fps: 30, codec: 'h265' },
+/** Output containers/codecs offered in the export dialog */
+const OUTPUT_FORMATS: {
+  id: OutputFormat
+  label: string
+  ext: string
+  hint: string
+}[] = [
+  { id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', hint: 'universal — best for uploads' },
+  { id: 'mp4-hevc', label: 'MP4 · H.265/HEVC', ext: 'mp4', hint: 'smaller files, modern players' },
+  { id: 'webm', label: 'WebM · VP9', ext: 'webm', hint: 'web embeds, open format' },
+  { id: 'mov', label: 'MOV · H.264', ext: 'mov', hint: 'Apple ecosystem handoff' },
+  { id: 'prores', label: 'MOV · ProRes 422', ext: 'mov', hint: 'editing master — very large' },
+]
+
+type DeliveryPreset = {
+  name: string
+  res: keyof typeof RESOLUTION_PRESETS
+  fps: 24 | 25 | 30 | 50 | 60
+  format: OutputFormat
+}
+
+const DELIVERY_PRESETS: DeliveryPreset[] = [
+  // YouTube
+  { name: 'YouTube — 1080p', res: '1080', fps: 30, format: 'mp4' },
+  { name: 'YouTube — 4K', res: '2160', fps: 30, format: 'mp4-hevc' },
+  { name: 'YouTube Shorts — vertical', res: 'v1080', fps: 30, format: 'mp4' },
+  // Instagram
+  { name: 'Instagram Feed — 4:5 (1080×1350)', res: 'ig45', fps: 30, format: 'mp4' },
+  { name: 'Instagram Reels / Stories', res: 'v1080', fps: 30, format: 'mp4' },
+  { name: 'Instagram Square — 1:1', res: 'sq1080', fps: 30, format: 'mp4' },
+  // Facebook
+  { name: 'Facebook Feed — HD', res: '720', fps: 30, format: 'mp4' },
+  { name: 'Facebook Feed — 1080p', res: '1080', fps: 30, format: 'mp4' },
+  { name: 'Facebook Reels — vertical', res: 'v1080', fps: 30, format: 'mp4' },
+  // Masters
+  { name: 'Cinematic master — 2.39:1 @ 24p (ProRes)', res: 'cine', fps: 24, format: 'prores' },
+  { name: 'Archive master (H.265)', res: '2160', fps: 30, format: 'mp4-hevc' },
 ]
 
 function makeDefaultTracks(): TimelineTrack[] {
@@ -136,8 +168,8 @@ function App() {
   const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
-  const [exportCodec, setExportCodec] = useState<'h264' | 'h265'>('h264')
-  const [deliveryPreset, setDeliveryPreset] = useState('YouTube / Web — 1080p')
+  const [exportFormat, setExportFormat] = useState<OutputFormat>('mp4')
+  const [deliveryPreset, setDeliveryPreset] = useState('YouTube — 1080p')
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportState, setExportState] = useState<ExportProgress | null>(null)
   const [markers, setMarkers] = useState<TimelineMarker[]>(saved.current?.markers ?? [])
@@ -635,7 +667,11 @@ function App() {
       return
     }
 
-    const outputPath = await pickSavePath(`edit-${new Date().toISOString().slice(0, 10)}.mp4`)
+    const fmtMeta = OUTPUT_FORMATS.find((f) => f.id === exportFormat)
+    const outputPath = await pickSavePath(
+      `aerosphere-${new Date().toISOString().slice(0, 10)}.${fmtMeta?.ext ?? 'mp4'}`,
+      fmtMeta?.ext ?? 'mp4'
+    )
     if (!outputPath) return
 
     const preset = RESOLUTION_PRESETS[exportResolution]
@@ -654,7 +690,7 @@ function App() {
         width: preset.width,
         height: preset.height,
         fps: exportFps,
-        codec: exportCodec,
+        format: exportFormat,
         visualClips: visualClips.map((c) => ({
           kind: c.kind === 'photo' ? ('photo' as const) : ('video' as const),
           path: c.path,
@@ -703,7 +739,7 @@ function App() {
       if (unsubscribe) unsubscribe()
       setExportState(null)
     }
-  }, [exportState, videoTracksList, audioTracksList, exportResolution, exportFps, exportCodec, engine])
+  }, [exportState, videoTracksList, audioTracksList, exportResolution, exportFps, exportFormat, engine])
 
   const openExportDialog = useCallback(() => {
     setError(null)
@@ -863,7 +899,7 @@ function App() {
                   if (preset) {
                     setExportResolution(preset.res)
                     setExportFps(preset.fps)
-                    setExportCodec(preset.codec)
+                    setExportFormat(preset.format)
                   }
                 }}
               >
@@ -910,19 +946,23 @@ function App() {
               </select>
             </div>
             <div className="form-row">
-              <label htmlFor="export-codec">Encoder</label>
+              <label htmlFor="export-format">Format</label>
               <select
-                id="export-codec"
-                value={exportCodec}
-                onChange={(e) => setExportCodec(e.target.value as typeof exportCodec)}
+                id="export-format"
+                value={exportFormat}
+                onChange={(e) => setExportFormat(e.target.value as OutputFormat)}
               >
-                <option value="h264">H.264 (compatible)</option>
-                <option value="h265">H.265 / HEVC (smaller)</option>
+                {OUTPUT_FORMATS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label} — {f.hint}
+                  </option>
+                ))}
               </select>
             </div>
             <p className="export-meta">
               {videoTracksList.reduce((n, t) => n + t.clips.length, 0)} visual clips ·{' '}
-              timeline length {formatTime(engine.totalDuration)}
+              timeline length {formatTime(engine.totalDuration)} · saves as{' '}
+              .{OUTPUT_FORMATS.find((f) => f.id === exportFormat)?.ext}
             </p>
             <div className="dialog-actions">
               <button className="btn-secondary" onClick={() => setShowExportDialog(false)}>

@@ -215,12 +215,15 @@ export interface ExportMusicClip {
   normalize?: boolean
 }
 
+export type OutputFormat = 'mp4' | 'mp4-hevc' | 'webm' | 'mov' | 'prores'
+
 export interface ExportTimelineOptions {
   outputPath: string
   width: number
   height: number
   fps: number
-  codec: 'h264' | 'h265'
+  /** output container + codec family */
+  format?: OutputFormat
   visualClips: ExportVisualClip[]
   musicClips: ExportMusicClip[]
 }

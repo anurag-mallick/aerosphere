@@ -43,9 +43,17 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 - Any number of audio tracks playing simultaneously
 
 ### Export & delivery
-- **Delivery presets** — YouTube 1080p/4K, Reels/TikTok vertical, square feed, cinematic master, H.265 archive
-- Manual control of resolution, frame rate (24–60 fps) and encoder (H.264/H.265)
+- **Delivery presets** — YouTube 1080p/4K/Shorts, Instagram Feed 4:5 / Reels / Square, Facebook Feed/Reels, cinematic master, H.265 archive
+- **Output format choice**: MP4 (H.264 or H.265), WebM (VP9), MOV (H.264) and ProRes 422 editing masters
+- Manual control of resolution, frame rate (24–60 fps)
 - Background music mixing, live progress with cancel support
+
+| Platform | Preset |
+| --- | --- |
+| YouTube | 1080p · 4K · Shorts (vertical) |
+| Instagram | Feed 4:5 (1080×1350) · Reels/Stories (vertical) · Square |
+| Facebook | Feed HD/1080p · Reels (vertical) |
+| Masters | Cinematic ProRes · H.265 archive |
 
 ---
 

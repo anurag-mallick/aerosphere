@@ -43,10 +43,14 @@ export async function pickLutFile(): Promise<string | null> {
   return paths && paths.length > 0 ? paths[0] : null
 }
 
-export async function pickSavePath(defaultName: string) {
+export async function pickSavePath(defaultName: string, ext = 'mp4') {
+  const label = ext.toUpperCase()
   return api().saveFileDialog({
     title: 'Export Movie',
     defaultPath: defaultName,
-    filters: [{ name: 'MP4', extensions: ['mp4'] }],
+    filters: [
+      { name: label, extensions: [ext] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
   })
 }

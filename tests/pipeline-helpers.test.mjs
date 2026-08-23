@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  outputSpec,
+  buildFinalizeArgs,
   tempoChain,
   colorEqArgs,
   videoFadeArgs,
@@ -120,5 +122,42 @@ describe('clamp / lutArgs / copyLutToWorkDir', () => {
     expect(copyLutToWorkDir(safeSrc, 3, dir)).toBe('lut-3.cube')
     expect(fs.existsSync(path.join(dir, 'lut-3.cube'))).toBe(true)
     expect(copyLutToWorkDir(src, 4, dir)).toBeNull()
+  })
+})
+
+describe('output formats', () => {
+  it('defaults to mp4/h264 with plain copy finalization', () => {
+    const spec = outputSpec(undefined)
+    expect(spec.ext).toBe('mp4')
+    expect(spec.videoCodec).toBe('h264')
+    const fin = buildFinalizeArgs(spec, 'in.mp4', 'out.mp4')
+    expect(fin.reencode).toBe(false)
+    expect(fin.args.join(' ')).toContain('-c copy')
+  })
+
+  it('webm transcodes to vp9 + opus', () => {
+    const spec = outputSpec('webm')
+    expect(spec.ext).toBe('webm')
+    const fin = buildFinalizeArgs(spec, 'in.mp4', 'out.webm')
+    expect(fin.reencode).toBe(true)
+    expect(fin.args.join(' ')).toContain('libvpx-vp9')
+    expect(fin.args.join(' ')).toContain('libopus')
+    expect(fin.args[fin.args.length - 1]).toBe('out.webm')
+  })
+
+  it('prores masters use prores_ks with pcm audio in mov', () => {
+    const spec = outputSpec('prores')
+    expect(spec.ext).toBe('mov')
+    const fin = buildFinalizeArgs(spec, 'in.mp4', 'out.mov')
+    expect(fin.reencode).toBe(true)
+    expect(fin.args.join(' ')).toContain('prores_ks')
+    expect(fin.args.join(' ')).toContain('pcm_s16le')
+  })
+
+  it('hevc keeps the mp4 fast path', () => {
+    const spec = outputSpec('mp4-hevc')
+    expect(spec.ext).toBe('mp4')
+    expect(spec.videoCodec).toBe('h265')
+    expect(buildFinalizeArgs(spec, 'a.mp4', 'b.mp4').reencode).toBe(false)
   })
 })
