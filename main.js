@@ -69,10 +69,7 @@ function registerMediaProtocol() {
         filePath = filePath.replace(/^\/([A-Za-z]:)/, '$1');
       }
 
-      // Robust proxy editing: generate a lightweight 480p sibling so high-res
-// footage (e.g. 5.7K 360° or 4K drone) previews smoothly. The media://
-// handler serves the proxy automatically whenever it exists.
-ipcMain.handle('generate-proxy', async (_event, inputPath) => {
+      ipcMain.handle('find-subtitle', async (_event, videoPath) => {
   const parsed = path.parse(inputPath);
   const outPath = path.join(parsed.dir, `${parsed.name}.aeroproxy.mp4`);
   if (fs.existsSync(outPath)) return { ok: true, proxyPath: outPath, existed: true };
@@ -296,6 +293,46 @@ ipcMain.handle('convert-insv', async (_event, inputPath) => {
       .on('end', () => resolve({ ok: true, outputPath }))
       .save(outputPath);
   });
+});
+
+// Robust proxy editing: generate a lightweight 480p sibling so high-res
+// footage (e.g. 5.7K 360° or 4K drone) previews smoothly. The media://
+// handler serves the proxy automatically whenever it exists.
+ipcMain.handle('generate-proxy', async (_event, inputPath) => {
+  const parsed = path.parse(inputPath);
+  const outPath = path.join(parsed.dir, `${parsed.name}.aeroproxy.mp4`);
+  if (fs.existsSync(outPath)) return { ok: true, proxyPath: outPath, existed: true };
+
+  return new Promise((resolve) => {
+    ffmpeg(inputPath)
+      .outputOptions([
+        '-vf', 'scale=-2:480',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-an',
+        '-movflags', '+faststart',
+      ])
+      .on('error', (err) => resolve({ ok: false, error: err.message }))
+      .on('end', () => resolve({ ok: true, proxyPath: outPath }))
+      .save(outPath);
+  });
+});
+
+// Grab-still: write a captured PNG data URL to a user-chosen path.
+ipcMain.handle('save-png', async (_event, dataUrl, defaultName) => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save Frame',
+      defaultPath: defaultName || 'frame.png',
+      filters: [{ name: 'PNG Image', extensions: ['png'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false };
+    const base64 = String(dataUrl).replace(/^data:image\/png;base64,/, '');
+    fs.writeFileSync(result.filePath, Buffer.from(base64, 'base64'));
+    return { ok: true, path: result.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // DJI drones (and others) record a telemetry .srt next to the video with the

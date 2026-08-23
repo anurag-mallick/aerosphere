@@ -163,6 +163,10 @@ export interface TimelineClip {
   eqTreble?: number
   /** remove mains hum at 50 or 60 Hz */
   dehum?: 'off' | '50' | '60'
+  /** cross-dissolve from the previous clip, seconds (0 = hard cut) */
+  dissolveIn?: number
+  /** photo: slow automatic zoom-in over the clip duration */
+  kenBurns?: boolean
   /** static quarter-turn rotation applied to this clip only */
   rotate90?: 0 | 90 | 180 | 270
   /** burned-in text overlay (titles à la FCP/Resolve) */
@@ -225,6 +229,8 @@ export interface ExportVisualClip {
   eqBass?: number
   eqTreble?: number
   dehum?: 'off' | '50' | '60'
+  /** cross-dissolve from the previous clip, seconds (0 = hard cut) */
+  dissolveIn?: number
 }
 
 export interface ExportMusicClip {
@@ -308,6 +314,10 @@ export interface ElectronAPI {
   generateProxy: (
     videoPath: string
   ) => Promise<{ ok: boolean; proxyPath?: string; existed?: boolean; error?: string }>
+  savePng: (
+    dataUrl: string,
+    defaultName: string
+  ) => Promise<{ ok: boolean; path?: string; error?: string }>
 
   exportTimeline: (options: ExportTimelineOptions) => Promise<ExportResult>
   cancelExport: () => Promise<{ ok: boolean }>

@@ -18,6 +18,7 @@ interface PreviewPlayerProps {
   onTogglePlay: () => void
   onToggleMute: () => void
   onSeek: (t: number) => void
+  onCaptureFrame: () => void
 }
 
 export function PreviewPlayer(props: PreviewPlayerProps) {
@@ -109,6 +110,9 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
             </p>
           </div>
         )}
+        <button className="mute-toggle" style={{ right: 44 }} onClick={props.onCaptureFrame} title="Grab still frame (PNG)">
+          📸
+        </button>
         <button className="mute-toggle" onClick={props.onToggleMute} title={muted ? 'Unmute' : 'Mute'}>
           {muted ? '🔇' : '🔊'}
         </button>

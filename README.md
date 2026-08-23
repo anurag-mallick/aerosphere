@@ -24,7 +24,10 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 
 ### General editor
 - Multi-track timeline (video/photo tracks + any number of audio tracks)
-- Trim, **split at playhead (`S`)**, drag-to-move with snapping, zoom
+- Trim, **split at playhead (`S`)**, **duplicate** (`⌘D`), drag-to-move with snapping, zoom
+- **Cross-dissolves** between adjacent clips (set per-clip dissolve length)
+- **Ken Burns** slow-zoom on photos
+- Jump between timeline markers with arrow keys
 - **Undo / redo** (`⌘Z` / `⇧⌘Z`) across the whole project
 - **Timeline markers** (`M`) on the ruler — click to jump, right-click to delete
 - **Per-clip rotation** — quarter-turn 0°/90°/180°/270° for any clip or section
@@ -122,7 +125,7 @@ npm run package     # full distributable (.dmg)
 | Burn telemetry | Inspector → *Telemetry SRT* (auto-detected) |
 | Export | **Export Movie** → resolution / fps / encoder → Save |
 
-Keyboard: `Space` play/pause · `S` split · `M` marker · `⌘Z`/`⇧⌘Z` undo·redo · `Delete` remove clip · `?` shortcut help · `Esc` deselect
+Keyboard: `Space` play/pause · `S` split · `⌘D` duplicate · `M` marker · `←`/`→` jump markers · `⌘Z`/`⇧⌘Z` undo·redo · `Delete` remove · `⇧Delete` ripple delete · `?` help · `Esc` deselect
 
 ---
 

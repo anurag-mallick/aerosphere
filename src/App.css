@@ -1199,3 +1199,68 @@ kbd {
 ::-webkit-scrollbar-thumb:hover {
   background: #44445e;
 }
+
+/* inspector collapsible panels */
+.panel-group {
+  border: 1px solid #2a2a3c;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  background: #202030;
+  overflow: hidden;
+}
+
+.panel-group summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #ddd;
+  user-select: none;
+}
+
+.panel-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-group summary::after {
+  content: '▾';
+  margin-left: auto;
+  color: #66667f;
+  transition: transform 0.15s;
+}
+
+.panel-group[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.panel-group[open] summary {
+  border-bottom: 1px solid #262636;
+}
+
+.panel-icon {
+  font-size: 0.85rem;
+}
+
+.panel-title {
+  flex: 1;
+}
+
+.panel-badge {
+  font-size: 0.58rem;
+  background: #e94560;
+  color: white;
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+
+.panel-body {
+  padding: 0.5rem 0.55rem;
+}
+
+.wheel-group {
+  margin-bottom: 0.35rem;
+}

@@ -671,6 +671,74 @@ function App() {
     setMarkers((prev) => prev.filter((m) => m.id !== id))
   }, [])
 
+  // -------------------------------------------------- duplicate / marker nav
+  const duplicateSelected = useCallback(() => {
+    if (!selectedClipInfo) return
+    const { track, clip } = selectedClipInfo
+    const copy: TimelineClip = {
+      ...clip,
+      id: uid('clip'),
+      keyframes: (clip.keyframes ?? []).map((k) => ({ ...k, id: uid('kf') })),
+    }
+    setTracks((prev) =>
+      prev.map((tr) =>
+        tr.id !== track.id
+          ? tr
+          : {
+              ...tr,
+              clips: [...tr.clips, { ...copy, position: clip.position + clip.duration }],
+            }
+      )
+    )
+  }, [selectedClipInfo])
+
+  const jumpMarker = useCallback(
+    (dir: 1 | -1) => {
+      const t = engine.currentTime
+      const sorted = markers.map((m) => m.time).sort((a, b) => a - b)
+      const target =
+        dir === 1 ? sorted.find((m) => m > t + 0.05) : [...sorted].reverse().find((m) => m < t - 0.05)
+      engine.seek(target ?? clamp(t + dir, 0, engine.totalDuration))
+    },
+    [markers, engine]
+  )
+
+  // ------------------------------------------------------- grab still frame
+  const captureFrame = useCallback(async () => {
+    try {
+      let dataUrl: string | null = null
+      if (engine.activeVideoClip && engine.videoRef.current && engine.videoRef.current.videoWidth > 0) {
+        const v = engine.videoRef.current
+        const canvas = document.createElement('canvas')
+        canvas.width = v.videoWidth
+        canvas.height = v.videoHeight
+        canvas.getContext('2d')?.drawImage(v, 0, 0)
+        dataUrl = canvas.toDataURL('image/png')
+      } else if (engine.activePhotoClip) {
+        const img = document.querySelector<HTMLImageElement>('.preview-photo')
+        if (img && img.naturalWidth > 0) {
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          canvas.getContext('2d')?.drawImage(img, 0, 0)
+          dataUrl = canvas.toDataURL('image/png')
+        }
+      }
+      if (!dataUrl) {
+        setError('Nothing to capture — play or seek to a frame first.')
+        return
+      }
+      const res = await window.electronAPI.savePng(
+        dataUrl,
+        `frame-${Math.round(engine.currentTime * 1000)}ms.png`
+      )
+      if (res.ok) setNotice(`Still saved: ${res.path}`)
+      else if (res.error) setError(res.error)
+    } catch (err) {
+      setError(`Capture failed: ${(err as Error).message}`)
+    }
+  }, [engine])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
@@ -685,12 +753,21 @@ function App() {
         e.preventDefault()
         if (e.shiftKey) redo()
         else undo()
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        duplicateSelected()
       } else if (e.code === 'Space') {
         e.preventDefault()
         engine.toggle()
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault()
         addMarker()
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        jumpMarker(1)
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        jumpMarker(-1)
       } else if (e.key === '?') {
         e.preventDefault()
         setShowShortcuts((v) => !v)
@@ -701,7 +778,7 @@ function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedClipId, deleteClip, splitSelectedClip, engine, undo, redo, addMarker])
+  }, [selectedClipId, deleteClip, splitSelectedClip, engine, undo, redo, addMarker, duplicateSelected, jumpMarker])
 
   // ------------------------------------------------------------------- export
   const runExport = useCallback(async () => {
@@ -767,6 +844,8 @@ function App() {
           audioDenoise: c.audioDenoise,
           audioNormalize: c.audioNormalize,
           rotate90: c.rotate90,
+          dissolveIn: c.dissolveIn,
+          kenBurns: c.kenBurns,
           eqBass: c.eqBass || 0,
           eqTreble: c.eqTreble || 0,
           dehum: c.dehum || 'off',
@@ -886,6 +965,7 @@ function App() {
             onTogglePlay={engine.toggle}
             onToggleMute={() => engine.setMuted(!engine.muted)}
             onSeek={engine.seek}
+            onCaptureFrame={captureFrame}
           />
 
           <Timeline

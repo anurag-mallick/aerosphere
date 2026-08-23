@@ -44,6 +44,25 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
+
+/** Collapsible inspector panel - keeps features discoverable without clutter */
+function Section({ icon, title, defaultOpen = false, children }: {
+  icon: string
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <details className={"panel-group"} open={defaultOpen}>
+      <summary>
+        <span className="panel-icon">{icon}</span>
+        <span className="panel-title">{title}</span>
+      </summary>
+      <div className="panel-body">{children}</div>
+    </details>
+  )
+}
+
 export function Inspector(props: InspectorProps) {
   const { clip, clipPlayhead } = props
 
@@ -232,198 +251,230 @@ export function Inspector(props: InspectorProps) {
         {is360 && <span className="badge-insv">360°</span>}
       </header>
 
-      {clip.kind === 'video' && (
-        <Row label="Speed">
-          <div className="speed-picker">
-            {SPEED_STEPS.map((s) => (
-              <button
-                key={s}
-                className={`btn-tiny ${Math.abs((clip.speed ?? 1) - s) < 1e-6 ? 'active' : ''}`}
-                onClick={() => props.onChangeSpeed(s)}
-              >
-                {s}×
-              </button>
-            ))}
-          </div>
-        </Row>
-      )}
-
-      <Row label="Colors">
-        <div className="color-sliders">
-          {(
-            [
-              ['Brightness', 'brightness'],
-              ['Contrast', 'contrast'],
-              ['Saturation', 'saturation'],
-              ['Gamma', 'gamma'],
-              ['Temperature', 'temperature'],
-              ['Tint', 'tint'],
-            ] as const
-          ).map(([label, key]) => (
-            <label key={key} className="mini-slider">
-              <span>{label}</span>
-              <input
-                type="range"
-                min={-100}
-                max={100}
-                value={Math.round((ca[key] ?? 0) * 100)}
-                onChange={(e) =>
-                  props.onUpdateClip({
-                    colorAdjust: { ...ca, [key]: Number(e.target.value) / 100 },
-                  })
-                }
-              />
-            </label>
-          ))}
-        </div>
-      </Row>
-
-      <>
-          <Row label="Grade (Lift / Gamma / Gain)">
-            <details className="kf-editor">
-              <summary>RGB wheels</summary>
-              {(
-                [
-                  ['Shadows', 'shadows'],
-                  ['Midtones', 'midtones'],
-                  ['Highlights', 'highlights'],
-                ] as const
-              ).map(([group]) => {
-                const prefix = group.toLowerCase()
-                return (
-                  <div key={group} className="wheel-group">
-                    <span className="inspector-label">{group}</span>
-                    {(['Red', 'Green', 'Blue'] as const).map((c) => (
-                      <label key={c} className="mini-slider">
-                        <span>{c[0]}</span>
-                        <input
-                          type="range"
-                          min={-100}
-                          max={100}
-                          value={Math.round((((ca as unknown as Record<string, number | undefined>)[`${prefix}${c}`]) ?? 0) * 100)}
-                          onChange={(e) =>
-                            props.onUpdateClip({
-                              colorAdjust: {
-                                ...ca,
-                                [`${prefix}${c}`]: Number(e.target.value) / 100,
-                              },
-                            })
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )
-              })}
-            </details>
-          </Row>
-          <Row label="Look FX">
-            <div className="color-sliders">
-              <label className="mini-slider">
-                <span>Vignette</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={Math.round((ca.vignette ?? 0) * 100)}
-                  onChange={(e) =>
-                    props.onUpdateClip({ colorAdjust: { ...ca, vignette: Number(e.target.value) / 100 } })
-                  }
-                />
-              </label>
-              <label className="mini-slider">
-                <span>Sharpen</span>
-                <input
-                  type="range"
-                  min={-100}
-                  max={300}
-                  value={Math.round((ca.sharpen ?? 0) * 100)}
-                  onChange={(e) =>
-                    props.onUpdateClip({ colorAdjust: { ...ca, sharpen: Number(e.target.value) / 100 } })
-                  }
-                />
-              </label>
-            </div>
-          </Row>
-          <Row label="Copy grade">
-            <div className="lut-row">
-              <button className="btn-tiny" onClick={props.onCopyGrade}>
-                Copy
-              </button>
-              <button className="btn-tiny" onClick={props.onPasteGrade} disabled={!props.canPasteGrade}>
-                Paste
-              </button>
-            </div>
-          </Row>
-        </>
-
-      {clip.kind === 'video' && (
-        <>
-          <Row label="Rotate">
+      <Section icon="🎬" title="Transform & Speed" defaultOpen>
+        {clip.kind === 'video' && (
+          <Row label="Speed">
             <div className="speed-picker">
-              {([0, 90, 180, 270] as const).map((deg) => (
+              {SPEED_STEPS.map((spd) => (
                 <button
-                  key={deg}
-                  className={`btn-tiny ${(clip.rotate90 ?? 0) === deg ? 'active' : ''}`}
-                  onClick={() => props.onUpdateClip({ rotate90: deg })}
-                  title={`Rotate this clip ${deg}°`}
+                  key={spd}
+                  className={`btn-tiny ${Math.abs((clip.speed ?? 1) - spd) < 1e-6 ? 'active' : ''}`}
+                  onClick={() => props.onChangeSpeed(spd)}
                 >
-                  {deg}°
+                  {spd}×
                 </button>
               ))}
             </div>
           </Row>
+        )}
 
-          <Row label="Log / LUT (DJI D-Log M)">
-            <div className="log-controls">
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={!!clip.logNormalize}
-                  onChange={(e) => props.onUpdateClip({ logNormalize: e.target.checked })}
-                />
-                <span className="small">normalize to Rec.709 (approx.)</span>
-              </label>
-              <div className="lut-row">
-                <button
-                  className="btn-tiny"
-                  onClick={async () => {
-                    const p = await pickLutFile()
-                    if (p) props.onUpdateClip({ lutPath: p })
-                  }}
-                >
-                  {clip.lutPath ? 'Change .cube' : 'Load .cube LUT'}
-                </button>
-                {clip.lutPath && (
-                  <button
-                    className="btn-tiny btn-danger"
-                    title={clip.lutPath}
-                    onClick={() => props.onUpdateClip({ lutPath: undefined })}
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
+        {clip.kind === 'video' && (
+          <Row label="Dissolve from previous">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.25}
+                value={clip.dissolveIn ?? 0}
+                onChange={(e) => props.onUpdateClip({ dissolveIn: Number(e.target.value) })}
+                style={{ flex: 1, accentColor: '#e94560' }}
+              />
+              <span className="small">{(clip.dissolveIn ?? 0).toFixed(2)}s</span>
             </div>
           </Row>
+        )}
 
-          {clip.srtPath && (
-            <Row label="Telemetry SRT">
+        {clip.kind === 'photo' && (
+          <label className="check-label" style={{ marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={!!clip.kenBurns}
+              onChange={(e) => props.onUpdateClip({ kenBurns: e.target.checked })}
+            />
+            <span className="small">Ken Burns — slow zoom-in</span>
+          </label>
+        )}
+
+        {clip.kind === 'video' && (
+          <>
+            <Row label="Rotate">
+              <div className="speed-picker">
+                {([0, 90, 180, 270] as const).map((deg) => (
+                  <button
+                    key={deg}
+                    className={`btn-tiny ${(clip.rotate90 ?? 0) === deg ? 'active' : ''}`}
+                    onClick={() => props.onUpdateClip({ rotate90: deg })}
+                    title={`Rotate this clip ${deg}°`}
+                  >
+                    {deg}°
+                  </button>
+                ))}
+              </div>
+            </Row>
+
+            <Row label="Stabilize">
               <label className="check-label">
                 <input
                   type="checkbox"
-                  checked={!!clip.burnSubtitles}
-                  onChange={(e) => props.onUpdateClip({ burnSubtitles: e.target.checked })}
+                  checked={!!clip.stabilize}
+                  onChange={(e) => props.onUpdateClip({ stabilize: e.target.checked })}
                 />
-                <span className="small" title={clip.srtPath}>
-                  burn flight data overlay ({clip.srtPath.split(/[\\/]/).pop()})
-                </span>
+                <span className="small">two-pass stabilization on export</span>
               </label>
             </Row>
-          )}
+          </>
+        )}
+      </Section>
 
-          {audioSection}
-          {titleSection}
+      <Section icon="🎨" title="Color & Look" defaultOpen>
+        <Row label="Primary">
+          <div className="color-sliders">
+            {(
+              [
+                ['Brightness', 'brightness'],
+                ['Contrast', 'contrast'],
+                ['Saturation', 'saturation'],
+                ['Gamma', 'gamma'],
+                ['Temperature', 'temperature'],
+                ['Tint', 'tint'],
+              ] as const
+            ).map(([label, key]) => (
+              <label key={key} className="mini-slider">
+                <span>{label}</span>
+                <input
+                  type="range"
+                  min={-100}
+                  max={100}
+                  value={Math.round((ca[key] ?? 0) * 100)}
+                  onChange={(e) =>
+                    props.onUpdateClip({
+                      colorAdjust: { ...ca, [key]: Number(e.target.value) / 100 },
+                    })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        </Row>
+
+        <Row label="Lift / Gamma / Gain wheels">
+          <details className="kf-editor">
+            <summary>RGB balance per tonal range</summary>
+            {(
+              [
+                ['Shadows', 'shadows'],
+                ['Midtones', 'midtones'],
+                ['Highlights', 'highlights'],
+              ] as const
+            ).map(([group]) => {
+              const prefix = group.toLowerCase()
+              return (
+                <div key={group} className="wheel-group">
+                  <span className="inspector-label">{group}</span>
+                  {(['Red', 'Green', 'Blue'] as const).map((c) => (
+                    <label key={c} className="mini-slider">
+                      <span>{c[0]}</span>
+                      <input
+                        type="range"
+                        min={-100}
+                        max={100}
+                        value={Math.round(
+                          (((ca as unknown as Record<string, number | undefined>)[`${prefix}${c}`]) ?? 0) * 100
+                        )}
+                        onChange={(e) =>
+                          props.onUpdateClip({
+                            colorAdjust: {
+                              ...ca,
+                              [`${prefix}${c}`]: Number(e.target.value) / 100,
+                            },
+                          })
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              )
+            })}
+          </details>
+        </Row>
+
+        <Row label="Look FX">
+          <div className="color-sliders">
+            <label className="mini-slider">
+              <span>Vignette</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round((ca.vignette ?? 0) * 100)}
+                onChange={(e) =>
+                  props.onUpdateClip({ colorAdjust: { ...ca, vignette: Number(e.target.value) / 100 } })
+                }
+              />
+            </label>
+            <label className="mini-slider">
+              <span>Sharpen</span>
+              <input
+                type="range"
+                min={-100}
+                max={300}
+                value={Math.round((ca.sharpen ?? 0) * 100)}
+                onChange={(e) =>
+                  props.onUpdateClip({ colorAdjust: { ...ca, sharpen: Number(e.target.value) / 100 } })
+                }
+              />
+            </label>
+          </div>
+        </Row>
+
+        <Row label="Copy / Paste grade">
+          <div className="lut-row">
+            <button className="btn-tiny" onClick={props.onCopyGrade}>
+              Copy
+            </button>
+            <button className="btn-tiny" onClick={props.onPasteGrade} disabled={!props.canPasteGrade}>
+              Paste
+            </button>
+          </div>
+        </Row>
+
+        <Row label="Log / LUT (DJI D-Log M)">
+          <div className="log-controls">
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={!!clip.logNormalize}
+                onChange={(e) => props.onUpdateClip({ logNormalize: e.target.checked })}
+              />
+              <span className="small">normalize to Rec.709 (approx.)</span>
+            </label>
+            <div className="lut-row">
+              <button
+                className="btn-tiny"
+                onClick={async () => {
+                  const lut = await pickLutFile()
+                  if (lut) props.onUpdateClip({ lutPath: lut })
+                }}
+              >
+                {clip.lutPath ? 'Change .cube' : 'Load .cube LUT'}
+              </button>
+              {clip.lutPath && (
+                <button
+                  className="btn-tiny btn-danger"
+                  title={clip.lutPath}
+                  onClick={() => props.onUpdateClip({ lutPath: undefined })}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+        </Row>
+      </Section>
+
+      <Section icon="🔊" title="Audio">
+        {audioSection}
 
           <Row label="Fades">
             <div className="color-sliders">
@@ -468,150 +519,141 @@ export function Inspector(props: InspectorProps) {
               </label>
             </div>
           </Row>
-        </>
-      )}
+      </Section>
 
-      {clip.kind === 'video' && is360 && (
-        <Row label="Lens FOV">
-          <div className="lensfov-row">
-            <input
-              type="range"
-              min={120}
-              max={300}
-              step={5}
-              value={clip.lensFov ?? 220}
-              onChange={(e) => props.onUpdateClip({ lensFov: Number(e.target.value) })}
-              style={{ flex: 1, accentColor: '#e94560' }}
-            />
-            <span className="small">{clip.lensFov ?? 220}°</span>
-            <button className="btn-tiny" onClick={() => props.onUpdateClip({ lensFov: 220 })}>
-              Reset
-            </button>
-          </div>
-        </Row>
-      )}
+        <Section icon="📝" title="Titles & Overlays">
+          {titleSection}
 
-      {clip.kind === 'video' && !is360 && (
-        <Row label="Stabilize">
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={!!clip.stabilize}
-              onChange={(e) => props.onUpdateClip({ stabilize: e.target.checked })}
-            />
-            <span className="small">two-pass stabilization on export</span>
-          </label>
-        </Row>
-      )}
-
-      <section className="kf-section">
-        <header className="kf-header">
-          <h3>Keyframes</h3>
-          <button className="btn-tiny" onClick={addKeyframe} disabled={!canPlaceKf}>
-            + At playhead
-          </button>
-        </header>
-        {!canPlaceKf && (
-          <p className="empty-hint">Move the playhead over this clip to place keyframes.</p>
-        )}
-        {sortedKfs.length === 0 ? (
-          <p className="empty-hint">
-            {is360
-              ? 'Add keyframes to pan/zoom the 360° view.'
-              : 'Add keyframes to pan/zoom the virtual camera.'}
-          </p>
-        ) : (
-          <ul className="kf-list">
-            {sortedKfs.map((k) => (
-              <li key={k.id} className="kf-item">
-                <span className="kf-time">{k.time.toFixed(2)}s</span>
-                <span className="kf-values">
-                  {is360
-                    ? `${k.pan}° ${k.tilt > 0 ? '+' : ''}${k.tilt}° · ${k.fov}°`
-                    : `×${k.fov.toFixed(1)} ${k.pan > 0 ? '→' : k.pan < 0 ? '←' : '·'} ${k.tilt > 0 ? '↓' : k.tilt < 0 ? '↑' : ''}`}
+          {clip.srtPath && (
+            <Row label="Telemetry SRT">
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={!!clip.burnSubtitles}
+                  onChange={(e) => props.onUpdateClip({ burnSubtitles: e.target.checked })}
+                />
+                <span className="small" title={clip.srtPath}>
+                  burn flight data overlay ({clip.srtPath.split(/[\\/]/).pop()})
                 </span>
-                <select
-                  className="kf-easing"
-                  value={k.easing}
-                  onChange={(e) =>
-                    updateKf(k.id, { easing: e.target.value as ClipKeyframe['easing'] })
-                  }
-                >
-                  <option value="ease">Ease</option>
-                  <option value="linear">Linear</option>
-                </select>
-                <button className="btn-tiny btn-danger" onClick={() => removeKf(k.id)}>
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+              </label>
+            </Row>
+          )}
+        </Section>
 
-        {sortedKfs.length > 0 && (
-          <div className="kf-editors">
-            <p className="inspector-note">
-              Edit values per keyframe:
-            </p>
-            {sortedKfs.map((k) => (
-              <details key={k.id} className="kf-editor">
-                <summary>
-                  @ {k.time.toFixed(2)}s —{' '}
-                  {is360
-                    ? `yaw ${k.pan}° · pitch ${k.tilt}° · roll ${k.roll}° · fov ${k.fov}°`
-                    : `zoom ×${Number(k.fov).toFixed(1)} · pan ${k.pan} · tilt ${k.tilt}`}
-                  {is360 && (
-                    <button
-                      className="btn-tiny"
-                      title="Reset this view"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        updateKf(k.id, { pan: 0, tilt: 0, roll: 0, fov: 90 })
-                      }}
-                    >
-                      ⟲
-                    </button>
-                  )}
-                </summary>
-                {(
-                  [
-                    ['Pan', 'pan', is360 ? [-180, 180] : [-100, 100], 1],
-                    ['Tilt', 'tilt', is360 ? [-180, 180] : [-100, 100], 1],
-                    ['Roll', 'roll', [-45, 45], 1],
-                    [is360 ? 'FOV °' : 'Zoom', 'fov', is360 ? [20, 140] : [1, 4], is360 ? 1 : 0.1],
-                  ] as const
-                ).map(([label, key, [min, max], step]) => (
-                  <label key={key} className="mini-slider">
-                    <span>
-                      {label} <b>{typeof k[key] === 'number' ? k[key] : ''}</b>
+      {clip.kind === 'video' && (
+        <Section icon="🌐" title="360° Reframe & Keyframes">
+          {is360 && (
+            <Row label="Lens FOV">
+              <div className="lensfov-row">
+                <input
+                  type="range"
+                  min={120}
+                  max={300}
+                  step={5}
+                  value={clip.lensFov ?? 220}
+                  onChange={(e) => props.onUpdateClip({ lensFov: Number(e.target.value) })}
+                  style={{ flex: 1, accentColor: '#e94560' }}
+                />
+                <span className="small">{clip.lensFov ?? 220}°</span>
+                <button className="btn-tiny" onClick={() => props.onUpdateClip({ lensFov: 220 })}>
+                  Reset
+                </button>
+              </div>
+            </Row>
+          )}
+
+          <section className="kf-section">
+            <header className="kf-header">
+              <h3>Keyframes</h3>
+              <button className="btn-tiny" onClick={addKeyframe} disabled={!canPlaceKf}>
+                + At playhead
+              </button>
+            </header>
+            {!canPlaceKf && (
+              <p className="empty-hint">Move the playhead over this clip to place keyframes.</p>
+            )}
+            {sortedKfs.length === 0 ? (
+              <p className="empty-hint">
+                {is360
+                  ? 'Add keyframes to pan/zoom the 360\u00b0 view.'
+                  : 'Add keyframes to pan/zoom the virtual camera.'}
+              </p>
+            ) : (
+              <ul className="kf-list">
+                {sortedKfs.map((k) => (
+                  <li key={k.id} className="kf-item">
+                    <span className="kf-time">{k.time.toFixed(2)}s</span>
+                    <span className="kf-values">
+                      {is360
+                        ? `${k.pan}\u00b0 ${k.tilt > 0 ? '+' : ''}${k.tilt}\u00b0 \u00b7 ${k.fov}\u00b0`
+                        : `\u00d7${k.fov.toFixed(1)} ${k.pan > 0 ? '\u2192' : k.pan < 0 ? '\u2190' : '\u00b7'} ${k.tilt > 0 ? '\u2193' : k.tilt < 0 ? '\u2191' : ''}`}
                     </span>
-                    <input
-                      type="range"
-                      min={min}
-                      max={max}
-                      step={step}
-                      value={k[key]}
-                      onChange={(e) => updateKf(k.id, { [key]: Number(e.target.value) })}
-                    />
-                  </label>
+                    <select
+                      className="kf-easing"
+                      value={k.easing}
+                      onChange={(e) =>
+                        updateKf(k.id, { easing: e.target.value as ClipKeyframe['easing'] })
+                      }
+                    >
+                      <option value="ease">Ease</option>
+                      <option value="linear">Linear</option>
+                    </select>
+                    <button className="btn-tiny btn-danger" onClick={() => removeKf(k.id)}>
+                      \u2715
+                    </button>
+                  </li>
                 ))}
-                {is360 && (
-                  <div className="presets">
-                    {PERSPECTIVE_PRESETS.map((p) => (
-                      <button key={p.name} className="btn-tiny" onClick={() => {
-                        updateKf(k.id, { tilt: p.tilt ?? k.tilt, fov: p.fov })
-                      }}>
-                        {p.name}
-                      </button>
+              </ul>
+            )}
+
+            {sortedKfs.length > 0 && (
+              <div className="kf-editors">
+                <p className="inspector-note">Edit values per keyframe:</p>
+                {sortedKfs.map((k) => (
+                  <details key={k.id} className="kf-editor">
+                    <summary>@ {k.time.toFixed(2)}s</summary>
+                    {(
+                      [
+                        ['Pan', 'pan', is360 ? [-180, 180] : [-100, 100], 1],
+                        ['Tilt', 'tilt', is360 ? [-180, 180] : [-100, 100], 1],
+                        ['Roll', 'roll', [-45, 45], 1],
+                        [is360 ? 'FOV \u00b0' : 'Zoom', 'fov', is360 ? [20, 140] : [1, 4], is360 ? 1 : 0.1],
+                      ] as const
+                    ).map(([label, key, range, step]) => (
+                      <label key={key} className="mini-slider">
+                        <span>
+                          {label} <b>{typeof k[key] === 'number' ? k[key] : ''}</b>
+                        </span>
+                        <input
+                          type="range"
+                          min={range[0]}
+                          max={range[1]}
+                          step={step}
+                          value={Number(k[key])}
+                          onChange={(e) => updateKf(k.id, { [key]: Number(e.target.value) })}
+                        />
+                      </label>
                     ))}
-                  </div>
-                )}
-              </details>
-            ))}
-          </div>
-        )}
-      </section>
+                    {is360 && (
+                      <div className="presets">
+                        {PERSPECTIVE_PRESETS.map((preset) => (
+                          <button
+                            key={preset.name}
+                            className="btn-tiny"
+                            onClick={() => updateKf(k.id, { tilt: preset.tilt ?? k.tilt, fov: preset.fov })}
+                          >
+                            {preset.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </details>
+                ))}
+              </div>
+            )}
+          </section>
+        </Section>
+      )}
     </aside>
   )
 }

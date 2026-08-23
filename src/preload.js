@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertInsv: (inputPath) => ipcRenderer.invoke('convert-insv', inputPath),
   findSubtitle: (videoPath) => ipcRenderer.invoke('find-subtitle', videoPath),
   generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
+  savePng: (dataUrl, defaultName) => ipcRenderer.invoke('save-png', dataUrl, defaultName),
+  generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
 
   // export pipeline
   exportTimeline: (options) => ipcRenderer.invoke('export-timeline', options),

@@ -293,6 +293,69 @@ function resolveFont() {
   return null;
 }
 
+/**
+ * Expand visualClips into an ordered list of timeline pieces, converting
+ * dissolveIn declarations into explicit three-part boundaries:
+ *   [prev clip trimmed] + [blend zone] + [this clip minus its head]
+ *
+ * Pure function. Returns pieces:
+ *   { type:'clip', clip, tlStart, tlEnd, srcTrim }  (srcTrim in source seconds)
+ *   { type:'blend', prevClip, clip, startTl, len }
+ */
+function expandTimelinePieces(visualClips) {
+  const clips = visualClips.map((c) => ({ ...c }));
+  // shared[i] = overlap seconds between clip i-1 and clip i
+  const shared = new Array(clips.length).fill(0);
+  for (let i = 1; i < clips.length; i++) {
+    const d = clamp(Number(clips[i].dissolveIn) || 0, 0, 2);
+    if (d <= 0) continue;
+    shared[i] = Math.min(d, clips[i].duration * 0.4, clips[i - 1].duration * 0.4);
+  }
+
+  const pieces = [];
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    const s = shared[i];
+
+    if (i > 0 && s > 0) {
+      pieces.push({
+        type: 'blend',
+        prevClip: clips[i - 1],
+        clip,
+        startTl: clip.position,
+        len: s,
+      });
+    }
+
+    const headSkip = s;
+    const tailCut = shared[i + 1] || 0;
+    const tlStart = clip.position + headSkip;
+    const tlEnd = clip.position + clip.duration - tailCut;
+    if (tlEnd - tlStart < 0.05) continue;
+    pieces.push({
+      type: 'clip',
+      clip,
+      tlStart,
+      tlEnd,
+      srcTrim: Math.max(0, clip.trimIn) + headSkip * (clip.speed || 1),
+    });
+  }
+  return pieces;
+}
+
+/** Ken Burns (slow zoom-in) chain fragment for photo segments */
+function kenBurnsArgs(enabled, width, height, fps, durationSec) {
+  if (!enabled) return [];
+  const frames = Math.max(2, Math.round(durationSec * fps));
+  return [
+    `scale=${width * 2}:${height * 2}`,
+    `zoompan=z='min(1+0.0018*on,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+      `:d=1:s=${width}x${height}:fps=${fps}`,
+    `trim=duration=${Number(durationSec).toFixed(3)},setpts=PTS-STARTPTS`,
+    void frames ? '' : '',
+  ].filter(Boolean);
+}
+
 /** quarter-turn helpers: transpose filters + swapped intermediate dimensions */
 function transposeArgs(rot90) {
   const q = (((rot90 | 0) % 360) + 360) % 360;
@@ -434,63 +497,179 @@ async function runExport(options) {
 
   try {
     // ------------------------------------------------------- render segments
+    const pieces = expandTimelinePieces(visualClips);
     const segPaths = [];
-    const totalSpansEstimate = visualClips.reduce((n, c) => {
-      if (c.kind === 'photo') return n + 1;
+    const totalUnitsEstimate = Math.max(1, pieces.reduce((n, piece) => {
+      if (piece.type === 'blend') return n + 1;
       const planSpans = buildReframePlan({
-        is360: !!c.is360,
-        lensFov: c.lensFov,
-        width,
-        height,
-        keyframes: c.keyframes,
-        trimIn: c.trimIn,
-        duration: c.duration,
-        speed: c.speed || 1,
+        is360: !!piece.clip.is360,
+        lensFov: piece.clip.lensFov,
+        width: piece.type === 'clip' ? rotatedDims(piece.clip.rotate90, width, height).w : width,
+        height: piece.type === 'clip' ? rotatedDims(piece.clip.rotate90, width, height).h : height,
+        keyframes: piece.clip.keyframes,
+        trimIn: piece.srcTrim,
+        duration: piece.tlEnd - piece.tlStart,
+        speed: piece.clip.speed || 1,
         fps,
       }).spans.length;
       return n + planSpans;
-    }, 0);
+    }, 0));
 
-    let doneSpans = 0;
+    let doneUnits = 0;
     const audioSources = []; // {path, trimIn, spanSource, speed, delaySec}
 
+    // per-clip stabilization tables + audio flags (collected up front)
+    const stabByClipId = new Map();
+    const audioFlagsById = new Map();
     for (let ci = 0; ci < visualClips.length; ci++) {
-      checkCancelled();
       const clip = visualClips[ci];
+      if (clip.kind !== 'video') continue;
       const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
-      const stage = `Rendering clip ${ci + 1} of ${visualClips.length}`;
-      report((doneSpans / totalSpansEstimate) * SEGMENT_WEIGHT, stage);
 
+      if (clip.stabilize && !clip.is360) {
+        checkCancelled();
+        report(2, `Analyzing motion: ${clip.name}`);
+        const trfPath = path.join(workDir, `stab-${ci}.trf`);
+        try {
+          await runFfmpeg([
+            '-ss', String(Math.max(0, clip.trimIn)),
+            '-t', String(clip.duration * speed),
+            '-i', clip.path,
+            '-an',
+            '-vf', `vidstabdetect=shakiness=8:accuracy=15:result=${trfPath}`,
+            '-f', 'null',
+            '-',
+          ]);
+          stabByClipId.set(clip.id, `vidstabtransform=input=${trfPath}:smoothing=30`);
+        } catch {
+          // stabilization is best-effort; continue unstabilized
+        }
+      }
+
+      let probeHasAudio = false;
+      try {
+        probeHasAudio = extractMetadata(await probeFile(clip.path)).hasAudio;
+      } catch {
+        probeHasAudio = false;
+      }
+      audioFlagsById.set(clip.id, {
+        clip,
+        speed,
+        hasAudio: probeHasAudio && !clip.muted,
+      });
+    }
+
+    /** look chain shared by every renderer branch */
+    const lookChain = (clip, extraTransposes = true) => [
+      ...(stabByClipId.get(clip.id) ? [stabByClipId.get(clip.id)] : []),
+      ...logNormalizeArgs(clip.logNormalize),
+      ...lutArgs(safeLutFor(clip)),
+      ...colorEqArgs(clip.colorAdjust),
+      ...(extraTransposes ? transposeArgs(clip.rotate90 | 0) : []),
+    ];
+
+    function safeLutFor(clip) {
+      const idx = visualClips.indexOf(clip);
+      return idx >= 0 ? copyLutToWorkDir(clip.lutPath, idx, workDir) : null;
+    }
+
+    const progressPerUnit = SEGMENT_WEIGHT / totalUnitsEstimate;
+    const markDone = (stageLabel) => {
+      doneUnits += 1;
+      report(doneUnits * progressPerUnit, stageLabel);
+    };
+
+    for (const piece of pieces) {
+      checkCancelled();
+
+      if (piece.type === 'blend') {
+        const { prevClip, clip, startTl, len } = piece;
+        const stage = `Dissolving into ${clip.name}`;
+        const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
+        const speedP = prevClip.speed || 1;
+        const speedC = clip.speed || 1;
+        const aSrc = prevClip.trimIn + (prevClip.duration - len) * speedP;
+        const bSrc = Math.max(0, clip.trimIn);
+
+        const inputA =
+          prevClip.kind === 'photo'
+            ? ['-loop', '1', '-framerate', String(fps), '-t', Number(len).toFixed(3), '-i', prevClip.path]
+            : ['-ss', aSrc.toFixed(3), '-t', Number(len).toFixed(3), '-i', prevClip.path];
+        const inputB =
+          clip.kind === 'photo'
+            ? ['-loop', '1', '-framerate', String(fps), '-t', Number(len).toFixed(3), '-i', clip.path]
+            : ['-ss', bSrc.toFixed(3), '-t', Number(len).toFixed(3), '-i', clip.path];
+
+        const branchA = [
+          ...lookChain(prevClip),
+          ...colorEqArgs(prevClip.colorAdjust),
+          ...titleArgs(prevClip.title),
+          'setsar=1',
+        ].join(',');
+        const branchB = [
+          ...lookChain(clip),
+          ...colorEqArgs(clip.colorAdjust),
+          ...titleArgs(clip.title),
+          `fade=t=in:st=0:d=${len.toFixed(3)}:alpha=1`,
+          'setsar=1',
+        ].join(',');
+
+        await runFfmpeg([
+          ...inputA,
+          ...inputB,
+          '-an',
+          '-filter_complex',
+          `[0:v]${branchA}[a];[1:v]${branchB},format=yuva420p[b];[a][b]overlay=eof_action=pass,format=yuv420p[v]`,
+          '-map', '[v]',
+          ...videoCodecArgs('h264'),
+          segPath,
+        ]);
+        markDone(stage);
+        segPaths.push(segPath);
+        continue;
+      }
+
+      const clip = piece.clip;
+      const stage = `Rendering ${clip.name}`;
+      const speed = clip.speed || 1;
+      const dims = rotatedDims(clip.rotate90, width, height);
+      const safeLut = safeLutFor(clip);
       const colorFilters = colorEqArgs(clip.colorAdjust);
-      const safeLut = copyLutToWorkDir(clip.lutPath, ci, workDir);
-      const rot = clip.rotate90 | 0;
-      const dims = rotatedDims(rot, width, height);
-      let stabTransform = null;
+      const tlLen = piece.tlEnd - piece.tlStart;
+      const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
 
       if (clip.kind === 'photo') {
-        const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
-        const vf = [
+        const kb = !!clip.kenBurns;
+        const frames = Math.max(2, Math.round(tlLen * fps));
+        const vfParts = [
           ...logNormalizeArgs(clip.logNormalize),
           ...lutArgs(safeLut),
           ...colorFilters,
-          ...videoFadeArgs(clip, 0, clip.duration, clip.duration),
+          ...(kb
+            ? [
+                `scale=${dims.w * 2}:${dims.h * 2}`,
+                `zoompan=z='min(1+0.0018*on,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+                  `:d=${frames}:s=${dims.w}x${dims.h}:fps=${fps}`,
+              ]
+            : [`scale=${dims.w}:${dims.h}`]),
           ...titleArgs(clip.title),
-          `scale=${dims.w}:${dims.h}`,
-          ...transposeArgs(rot),
+          ...videoFadeArgs(clip, 0, tlLen, tlLen),
+          ...transposeArgs(clip.rotate90 | 0),
           `fps=${fps}`,
           'setsar=1',
         ].join(',');
+        const inputOpts = kb
+          ? ['-i', clip.path]
+          : ['-loop', '1', '-framerate', String(fps), '-i', clip.path];
         await runFfmpeg([
-          '-loop', '1',
-          '-framerate', String(fps),
-          '-i', clip.path,
+          ...inputOpts,
           '-an',
-          '-vf', vf,
-          '-t', String(clip.duration),
+          '-vf', vfParts,
+          '-t', String(tlLen),
           ...videoCodecArgs('h264'),
           segPath,
-        ], { duration: clip.duration, onProgress: undefined });
-        doneSpans += 1;
+        ]);
+        markDone(stage);
         segPaths.push(segPath);
         continue;
       }
@@ -501,48 +680,25 @@ async function runExport(options) {
         width: dims.w,
         height: dims.h,
         keyframes: clip.keyframes,
-        trimIn: clip.trimIn,
-        duration: clip.duration,
+        trimIn: piece.srcTrim,
+        duration: tlLen,
         speed,
         fps,
       });
 
-      // stabilization pass 1 (flat videos only)
-      if (clip.stabilize && !clip.is360) {
-        checkCancelled();
-        report((doneSpans / totalSpansEstimate) * SEGMENT_WEIGHT, `${stage} - analyzing motion`);
-        const trfPath = path.join(workDir, `stab-${ci}.trf`);
-        await runFfmpeg([
-          '-ss', String(Math.max(0, clip.trimIn)),
-          '-t', String(clip.duration * speed),
-          '-i', clip.path,
-          '-an',
-          '-vf', `vidstabdetect=shakiness=8:accuracy=15:result=${trfPath}`,
-          '-f', 'null',
-          '-',
-        ]);
-        stabTransform = `vidstabtransform=input=${trfPath}:smoothing=30`;
-      }
-
-      let probeHasAudio = null; // lazy
-      const trimSafe = Math.max(0, clip.trimIn);
+      const weightPerSpan = progressPerUnit / plan.spans.length;
       for (let si = 0; si < plan.spans.length; si++) {
         checkCancelled();
         const span = plan.spans[si];
-        const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
-        // timeline-relative position of this span (for fade placement)
-        const segStartTl = (span.ss - trimSafe) / speed;
+        const segPath2 = path.join(workDir, `seg-${segPaths.length}.mp4`);
+        const segStartTl = piece.tlStart + ((span.ss - piece.srcTrim) / speed);
         const segDurTl = span.dur / speed;
         const vfParts = [
-          ...(stabTransform ? [stabTransform] : []),
-          ...logNormalizeArgs(clip.logNormalize),
-          ...lutArgs(safeLut),
           ...(span.filter ? [span.filter] : []),
           ...colorFilters,
           ...videoFadeArgs(clip, segStartTl, segDurTl, clip.duration),
           ...titleArgs(clip.title),
-          ...transposeArgs(rot),
-          // compress wall-clock time for speed ramps (paren-free form)
+          ...transposeArgs(clip.rotate90 | 0),
           ...(Math.abs(speed - 1) > 1e-6
             ? [`setpts=PTS/${speed.toFixed(6)}-STARTPTS/${speed.toFixed(6)}`]
             : []),
@@ -556,26 +712,20 @@ async function runExport(options) {
           '-an',
           '-vf', vfParts.join(','),
           ...videoCodecArgs('h264'),
-          segPath,
+          segPath2,
         ]);
-        doneSpans += 1;
-        segPaths.push(segPath);
+        doneUnits += 1;
+        segPaths.push(segPath2);
         if (si % 3 === 0 || si === plan.spans.length - 1) {
-          report((doneSpans / totalSpansEstimate) * SEGMENT_WEIGHT, stage);
+          report(doneUnits * progressPerUnit, stage);
         }
       }
 
-      if (probeHasAudio === null) {
-        try {
-          probeHasAudio = extractMetadata(await probeFile(clip.path)).hasAudio;
-        } catch {
-          probeHasAudio = false;
-        }
-      }
-      if (probeHasAudio && !clip.muted) {
+      const flags = audioFlagsById.get(clip.id);
+      if (flags && flags.hasAudio) {
         audioSources.push({
           path: clip.path,
-          trimIn: trimSafe,
+          trimIn: Math.max(0, clip.trimIn),
           spanSource: clip.duration * speed,
           speed,
           delaySec: Math.max(0, clip.position),
@@ -731,4 +881,5 @@ module.exports = {
   outputSpec,
   buildFinalizeArgs,
   audioChainParts,
+  expandTimelinePieces,
 };
