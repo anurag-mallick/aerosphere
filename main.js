@@ -69,25 +69,6 @@ function registerMediaProtocol() {
         filePath = filePath.replace(/^\/([A-Za-z]:)/, '$1');
       }
 
-      ipcMain.handle('find-subtitle', async (_event, videoPath) => {
-  const parsed = path.parse(inputPath);
-  const outPath = path.join(parsed.dir, `${parsed.name}.aeroproxy.mp4`);
-  if (fs.existsSync(outPath)) return { ok: true, proxyPath: outPath, existed: true };
-
-  return new Promise((resolve) => {
-    ffmpeg(inputPath)
-      .outputOptions([
-        '-vf', 'scale=-2:480',
-        '-preset', 'veryfast',
-        '-crf', '23',
-        '-an',
-        '-movflags', '+faststart',
-      ])
-      .on('error', (err) => resolve({ ok: false, error: err.message }))
-      .on('end', () => resolve({ ok: true, proxyPath: outPath }))
-      .save(outPath);
-  });
-});
 
 // Robust proxy editing: transparently serve a sibling
       // "<name>.aeroproxy.mp4" when one has been generated for the source.
