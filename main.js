@@ -340,7 +340,6 @@ ipcMain.handle('scan-folder', async (_event, dirPath, maxDepth = 4) => {
     }
   };
   walk(dirPath, 0);
-  console.log('[scan-folder] result:', out.videos.length, 'videos');
   return out;
 });
 

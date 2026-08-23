@@ -665,18 +665,21 @@ const [exportResolution, setExportResolution] =
         const item = newItems[i]
         try {
           const metadata = await fetchVideoMetadata(item.path)
-          const thumbnail = await fetchThumbnail(item.path, Math.min(1.2, (metadata.duration || 2) * 0.1))
           const det = detect360Projection(item.path, metadata.width, metadata.height)
           const is360 = det.is360
           let lrvPath: string | null = null
+          let thumbSource = item.path
           if (item.format === 'insv' && !item.pairPath) {
             try {
               const pair = await window.electronAPI.findInsvPair(item.path)
               lrvPath = pair.ok ? (pair.lrvPath ?? null) : null
+              // use LRV (pre-stitched equirect) for a representative thumbnail
+              if (lrvPath) thumbSource = lrvPath
             } catch {
               // optional feature
             }
           }
+          const thumbnail = await fetchThumbnail(thumbSource, Math.min(1.2, (metadata.duration || 2) * 0.1))
           setVideos((prev) =>
             prev.map((v) =>
               v.id === item.id
