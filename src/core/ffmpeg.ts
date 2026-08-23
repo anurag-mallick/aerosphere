@@ -1,11 +1,52 @@
-export async function processInsvVideo(inputPath: string) {
-  return { success: true, inputPath, outputPath: inputPath + '.mp4', metadata: { format: 'insv', resolution: '5.7K', fps: 30 } }
+// Renderer-side wrappers around the Electron IPC bridge.
+import type { VideoMetadata, ConvertInsvResult } from '../types/editor'
+
+export function mediaUrl(filePath: string): string {
+  return `media://local/${encodeURIComponent(filePath)}`
 }
 
-export async function processMp4Video(inputPath: string) {
-  return { success: true, inputPath, outputPath: inputPath, metadata: { format: 'mp4', resolution: '4K', fps: 60 } }
+const api = () => window.electronAPI
+
+export async function checkFfmpeg() {
+  return api().checkFfmpeg()
 }
 
-export async function extractVideoMetadata(filePath: string) {
-  return { duration: 120, width: 3840, height: 2160, codec: 'H.265', fps: '60/1', hasAudio: true }
+export async function fetchVideoMetadata(filePath: string): Promise<VideoMetadata> {
+  const res = await api().getVideoMetadata(filePath)
+  if (!res.ok || !res.metadata) {
+    throw new Error(res.error || 'Failed to read media metadata')
+  }
+  return res.metadata
+}
+
+export async function fetchThumbnail(
+  filePath: string,
+  timeSec?: number
+): Promise<string | undefined> {
+  const res = await api().generateThumbnail(filePath, timeSec)
+  if (res.ok && res.thumbnail) return res.thumbnail
+  return undefined
+}
+
+export async function convertInsvFile(inputPath: string): Promise<ConvertInsvResult> {
+  return api().convertInsv(inputPath)
+}
+
+export async function pickFiles(extensions: { name: string; extensions: string[] }[]) {
+  return api().openFileDialog({ fileTypes: extensions })
+}
+
+export async function pickLutFile(): Promise<string | null> {
+  const paths = await api().openFileDialog({
+    fileTypes: [{ name: 'Cube LUT', extensions: ['cube'] }],
+  })
+  return paths && paths.length > 0 ? paths[0] : null
+}
+
+export async function pickSavePath(defaultName: string) {
+  return api().saveFileDialog({
+    title: 'Export Movie',
+    defaultPath: defaultName,
+    filters: [{ name: 'MP4', extensions: ['mp4'] }],
+  })
 }

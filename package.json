@@ -1,21 +1,30 @@
 {
-  "name": "video-editor",
-  "version": "0.1.0",
+  "name": "aerosphere",
+  "version": "0.2.0",
   "description": "Unified video editing application for Insta 360 X3 (.insv) and DJI Mini 5 Pro videos",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:renderer": "vite",
     "build": "vite build",
-    "package": "electron-builder"
+    "typecheck": "tsc --noEmit",
+    "package": "npm run build && electron-builder"
   },
-  "keywords": ["video", "editor", "insta360", "dji", "360", "electron"],
+  "keywords": [
+    "video",
+    "editor",
+    "insta360",
+    "dji",
+    "360",
+    "electron"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "fluent-ffmpeg": "^2.1.2",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "fluent-ffmpeg": "^2.1.2"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.37",
@@ -24,5 +33,28 @@
     "electron": "^28.0.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.13"
+  },
+  "build": {
+    "appId": "com.hackerbhai.video-editor",
+    "productName": "AeroSphere",
+    "files": [
+      "main.js",
+      "export-pipeline.js",
+      "dist/**/*",
+      "src/preload.js"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.video",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   }
 }
