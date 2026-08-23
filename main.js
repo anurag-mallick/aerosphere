@@ -489,6 +489,43 @@ ipcMain.handle('prepare-photo', async (_event, inputPath) => {
   }
 });
 
+// Insta360 X3: merge the matched lens-file pair into one side-by-side
+// dual-fisheye master — exactly the layout v360=dfisheye expects.
+ipcMain.handle('combine-insv-pair', async (_event, opts) => {
+  const { backPath, frontPath } = opts;
+  try {
+    const hash = crypto.createHash('md5').update(backPath + '|' + frontPath).digest('hex').slice(0, 12);
+    const outDir = path.join(os.tmpdir(), 'aero-combined');
+    fs.mkdirSync(outDir, { recursive: true });
+    const outPath = path.join(outDir, `x3-${hash}.mp4`);
+    if (fs.existsSync(outPath)) return { ok: true, outputPath: outPath, cached: true };
+
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(backPath)
+        .input(frontPath)
+        .on('progress', (p) => {
+          if (typeof p.percent === 'number' && mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('stitch-progress', { percent: Math.min(99, p.percent) });
+          }
+        })
+        .on('error', reject)
+        .on('end', () => resolve())
+        .outputOptions([
+          '-filter_complex', '[0:v]fps=30,setpts=PTS-STARTPTS[a];[1:v]fps=30,setpts=PTS-STARTPTS[b];[a][b]hstack=inputs=2,format=yuv420p[v]',
+          '-map', '[v]', '-map', '0:a:0?',
+          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+          '-c:a', 'aac', '-b:a', '160k',
+          '-movflags', '+faststart',
+        ])
+        .save(outPath);
+    });
+    return { ok: true, outputPath: outPath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // DJI drones (and others) record a telemetry .srt next to the video with the
 // same basename - detect it so the renderer can offer burn-in.
 ipcMain.handle('find-subtitle', async (_event, videoPath) => {

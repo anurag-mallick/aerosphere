@@ -31,6 +31,7 @@ import { useProjectHistory } from './hooks/useProjectHistory'
 import { fileNameOf, formatTime, uid, clamp } from './utils/format'
 import { interpolateChannel, computeViewRect, type ViewRect } from './utils/keyframes'
 import { detect360Projection } from './utils/detect360'
+import { parseX3PairKey } from './utils/insvPairing'
 
 const STORAGE_KEY = 've:v1:project'
 
@@ -463,6 +464,7 @@ const [exportResolution, setExportResolution] =
         speed: 1,
         is360: video.is360 ?? false,
         projection: video.projection,
+        pairedPath: video.pairedPath,
         equirect: video.equirect ?? false,
         keyframes: [],
         volume: 1,
@@ -511,48 +513,89 @@ const [exportResolution, setExportResolution] =
       const paths = override ?? (await pickFiles(VIDEO_FILTERS))
       if (!paths || paths.length === 0) return
 
-      // Insta360 X3 dual-lens pairing: importing EITHER .insv of a pair
-      // imports the whole 360 video. If the sibling lens file is missing,
-      // the single file is imported on its own (one-side camera view).
+      // Insta360 X3 dual-lens pairing (parseX3PairKey): two picked files with
+      // the same key but lens codes 00/10 collapse into ONE library entry —
+      // '00' back lens becomes `path`, '10' front lens becomes `pairedPath`.
+      // A lone half still imports, flagged missingPair.
+      interface X3Group {
+        back?: string
+        front?: string
+        lrv?: string | null
+      }
       const seen = new Set<string>()
-      const queued: { path: string; pairPath: string | null; lrvPath: string | null }[] = []
+      const groups = new Map<string, X3Group>()
+      const order: { key: string | null; solo: string }[] = []
+
       for (const p of paths) {
-        if (seen.has(p)) continue
-        seen.add(p)
-        if (!/\.insv$/i.test(p)) {
-          queued.push({ path: p, pairPath: null, lrvPath: null })
+        const pk = parseX3PairKey(fileNameOf(p))
+        if (!pk) {
+          if (!seen.has(p)) {
+            seen.add(p)
+            order.push({ key: null, solo: p })
+          }
           continue
         }
-        try {
-          const r = await window.electronAPI.findInsvPair(p)
-          const pair = r.ok ? r.pairPath : null
-          if (pair && !seen.has(pair)) {
-            seen.add(pair)
-            queued.push({ path: p, pairPath: pair, lrvPath: r.lrvPath ?? null })
-          } else if (pair && seen.has(pair)) {
-            // counterpart already queued — attach as its pair
-            const existing = queued.find((q) => q.path === pair)
-            if (existing) existing.pairPath = p
-          }
-        } catch {
-          queued.push({ path: p, pairPath: null, lrvPath: null })
+        if (seen.has(pk.key)) continue
+        seen.add(pk.key)
+        order.push({ key: pk.key, solo: '' })
+        groups.set(pk.key, {})
+      }
+      for (const p of paths) {
+        const pk = parseX3PairKey(fileNameOf(p))
+        if (!pk || !groups.has(pk.key)) continue
+        const g = groups.get(pk.key)!
+        if (pk.lens === '00') g.back = p
+        else g.front = p
+      }
+
+      const resolved: { path: string; pairedPath: string | null; missingPair: boolean; display: string }[] = []
+      for (const o of order) {
+        if (!o.key) {
+          resolved.push({ path: o.solo, pairedPath: null, missingPair: false, display: fileNameOf(o.solo) })
+          continue
         }
+        const g = groups.get(o.key)!
+        const primary = g.back ?? g.front!
+        const paired = g.back && g.front ? (g.back === primary ? g.front : g.back) : null
+
+        let display = fileNameOf(primary).replace(/_(00|10)_/i, '_')
+
+        // complete a half-imported pair straight from disk when possible
+        let finalPaired = paired
+        let missingPair = !finalPaired
+        if (!finalPaired && g.back === primary && g.front !== undefined) {
+          // picked only one side but both sides were in the folder scan — handled above
+        }
+        if (!finalPaired) {
+          try {
+            const r = await window.electronAPI.findInsvPair(primary)
+            if (r.ok && r.pairPath) {
+              finalPaired = r.pairPath
+              missingPair = false
+              display = display.replace(/\.insv$/i, '.insv')
+            }
+          } catch {
+            // optional
+          }
+        }
+        if (missingPair) {
+          setError(
+            `Missing paired lens file for ${display} — this X3 clip needs both _00_ and _10_ files to stitch correctly.`
+          )
+        }
+        resolved.push({ path: primary, pairedPath: finalPaired, missingPair, display })
       }
 
-      const friendlyName = (p: string, pair: string | null) => {
-        const base = fileNameOf(p)
-        return pair ? base.replace(/_(00|10)_/i, '_') : base
-      }
-
-      const newItems: LibraryVideo[] = queued.map((q) => ({
+      const newItems: LibraryVideo[] = resolved.map((r0) => ({
         id: uid('vid'),
-        name: friendlyName(q.path, q.pairPath),
-        path: q.path,
-        format: /\.insv$/i.test(q.path) ? 'insv' : /\.mp4$/i.test(q.path) ? 'mp4' : 'other',
+        name: r0.display,
+        path: r0.path,
+        format: /\.insv$/i.test(r0.path) ? 'insv' : /\.mp4$/i.test(r0.path) ? 'mp4' : 'other',
         duration: 0,
         processing: true,
-        pairPath: q.pairPath,
-        lrvPath: q.lrvPath,
+        pairedPath: r0.pairedPath ?? undefined,
+        pairPath: r0.pairedPath,
+        missingPair: r0.missingPair,
       }))
       setVideos((prev) => [...prev, ...newItems])
 
@@ -564,15 +607,11 @@ const [exportResolution, setExportResolution] =
           const thumbnail = await fetchThumbnail(item.path, Math.min(1.2, (metadata.duration || 2) * 0.1))
           const det = detect360Projection(item.path, metadata.width, metadata.height)
           const is360 = det.is360
-          let pairPath: string | null = null
           let lrvPath: string | null = null
-          if (item.format === 'insv') {
+          if (item.format === 'insv' && !item.pairPath) {
             try {
               const pair = await window.electronAPI.findInsvPair(item.path)
-              if (pair.ok) {
-                pairPath = pair.pairPath
-                lrvPath = pair.lrvPath ?? null
-              }
+              lrvPath = pair.ok ? (pair.lrvPath ?? null) : null
             } catch {
               // optional feature
             }
@@ -585,16 +624,17 @@ const [exportResolution, setExportResolution] =
                     processing: false,
                     duration: metadata.duration,
                     thumbnail,
-                    is360,
-                    projection: det.projection,
-                    pairPath,
+                    is360: is360 || !!item.pairPath || det.is360,
+                    projection: item.pairPath ? 'dfisheye' : det.projection,
+                    pairedPath: item.pairPath ?? undefined,
+                    pairPath: item.pairPath ?? null,
                     lrvPath,
                     metadata: {
                       resolution: metadata.width && metadata.height ? `${metadata.width}×${metadata.height}` : undefined,
                       fps: metadata.fps ?? undefined,
                       codec: metadata.codec ?? undefined,
                       hasAudio: metadata.hasAudio,
-                      is360,
+                      is360: is360 || !!item.pairPath || det.is360,
                     },
                   }
                 : v
@@ -879,7 +919,21 @@ const [exportResolution, setExportResolution] =
       setConvertingVideoId(id)
       setError(null)
       try {
-        const result = await convertInsvFile(video.path)
+        let sourcePath = video.path
+        if (video.pairedPath) {
+          // X3 pair: build the side-by-side dual-fisheye master first, then
+          // run the fast remux on THAT — not on the raw '00' lens alone.
+          const comb = await window.electronAPI.combineInsvPair({
+            backPath: video.path,
+            frontPath: video.pairedPath,
+          })
+          if (!comb.ok || !comb.outputPath) {
+            setError(`Pair combine failed: ${comb.error}`)
+            return
+          }
+          sourcePath = comb.outputPath
+        }
+        const result = await convertInsvFile(sourcePath)
         if (!result.ok || !result.outputPath) {
           setError(`Conversion failed: ${result.error}`)
           return
@@ -1109,6 +1163,7 @@ const [exportResolution, setExportResolution] =
           audioNormalize: c.audioNormalize,
           rotate90: c.rotate90,
           equirect: c.equirect,
+          pairedPath: c.pairedPath,
           dissolveIn: c.dissolveIn,
           kenBurns: c.kenBurns,
           eqBass: c.eqBass || 0,

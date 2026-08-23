@@ -388,6 +388,14 @@ button {
   background: rgba(58, 110, 210, 0.92);
 }
 
+.source-chip.is-frontback {
+  background: rgba(23, 132, 126, 0.92);
+}
+
+.source-chip.is-missing {
+  background: rgba(214, 158, 46, 0.95);
+}
+
 .thumb-fallback svg {
   color: #7d87a8;
 }

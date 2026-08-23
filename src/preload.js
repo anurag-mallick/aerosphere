@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDirectoryDialog: () => ipcRenderer.invoke('open-directory-dialog'),
   findInsvPair: (insvPath) => ipcRenderer.invoke('find-insv-pair', insvPath),
   stitchInsv: (opts) => ipcRenderer.invoke('stitch-insv', opts),
+  combineInsvPair: (opts) => ipcRenderer.invoke('combine-insv-pair', opts),
   onStitchProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on('stitch-progress', listener);

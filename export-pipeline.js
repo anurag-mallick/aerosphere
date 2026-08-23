@@ -490,6 +490,29 @@ async function runExport(options) {
   const workDir = path.join(os.tmpdir(), `video-editor-export-${Date.now()}`);
   fs.mkdirSync(workDir, { recursive: true });
 
+  // X3 dual-file sources are merged into side-by-side dual-fisheye
+  // intermediates (cached per pair) before rendering.
+  const combinedCache = new Map();
+  const combinedSourceFor = async (clip) => {
+    if (!clip.pairedPath) return clip.path;
+    const key = `${clip.path}|${clip.pairedPath}`;
+    if (!combinedCache.has(key)) {
+      const out = path.join(workDir, `combined-${combinedCache.size}.mp4`);
+      await runFfmpeg([
+        '-i', clip.path,
+        '-i', clip.pairedPath,
+        '-filter_complex',
+          '[0:v]fps=30,setpts=PTS-STARTPTS[a];[1:v]fps=30,setpts=PTS-STARTPTS[b];' +
+          '[a][b]hstack=inputs=2,format=yuv420p[v]',
+        '-map', '[v]', '-an',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+        out,
+      ]);
+      combinedCache.set(key, out);
+    }
+    return combinedCache.get(key);
+  };
+
   const SEGMENT_WEIGHT = 78;
   const CONCAT_WEIGHT = 12;
   const AUDIO_WEIGHT = 10;
@@ -526,6 +549,8 @@ async function runExport(options) {
       const clip = visualClips[ci];
       if (clip.kind !== 'video') continue;
       const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+
+      const renderPath = clip.pairedPath ? await combinedSourceFor(clip) : clip.path;
 
       if (clip.stabilize && !clip.is360) {
         checkCancelled();
@@ -711,7 +736,7 @@ async function runExport(options) {
         await runFfmpeg([
           '-ss', String(Math.max(0, span.ss)),
           '-t', String(span.dur),
-          '-i', clip.path,
+          '-i', renderPath,
           '-an',
           '-vf', vfParts.join(','),
           ...videoCodecArgs('h264'),

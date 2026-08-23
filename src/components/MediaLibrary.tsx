@@ -79,6 +79,20 @@ function VideoCard({
         <span className={`source-chip ${video.is360 ? 'is-360' : 'is-drone'}`}>
           {video.is360 ? '360°' : 'DRONE'}
         </span>
+        {video.pairedPath && (
+          <span className="source-chip is-frontback" style={{ top: 'auto', bottom: 3 }}>
+            FRONT+BACK
+          </span>
+        )}
+        {video.missingPair && (
+          <span
+            className="source-chip is-missing"
+            style={{ top: 'auto', bottom: 3 }}
+            title="Missing paired lens file — this X3 clip needs both _00_ and _10_ files to stitch correctly."
+          >
+            ⚠ NO PAIR
+          </span>
+        )}
       </div>
       <div className="library-item-info">
         <p className="clip-name" title={video.name}>

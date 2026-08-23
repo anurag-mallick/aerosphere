@@ -27,6 +27,10 @@ export interface LibraryVideo {
   equirect?: boolean
   /** sibling lens file for dual-fisheye .insv pairs */
   pairPath?: string | null
+  /** front-lens ('10') counterpart when this entry is a complete X3 pair */
+  pairedPath?: string
+  /** imported without its matching lens file */
+  missingPair?: boolean
   /** pre-stitched low-res LRV proxy shipped next to the .insv files */
   lrvPath?: string | null
 }
@@ -140,6 +144,8 @@ export interface TimelineClip {
   is360?: boolean
   /** frame layout of this 360° source */
   projection?: 'dfisheye' | 'equirect'
+  /** front-lens counterpart for X3 dual-file sources */
+  pairedPath?: string
   /** source is already-stitched equirectangular footage */
   equirect?: boolean
   /** source lens FOV used when converting dual-fisheye input */
@@ -170,6 +176,7 @@ export interface TimelineClip {
   audioNormalize?: boolean
   /** music clip: automatically dip under dialogue/video audio */
   duckUnderVideo?: boolean
+  /** front-lens counterpart for X3 dual-file sources */
   /** audio EQ: bass gain -1..1 (±12 dB) */
   eqBass?: number
   /** audio EQ: treble gain -1..1 (±12 dB) */
@@ -226,6 +233,8 @@ export interface ExportVisualClip {
   is360?: boolean
   equirect?: boolean
   projection?: 'dfisheye' | 'equirect'
+  /** side-by-side dual-fisheye master produced by combine-insv-pair */
+  pairedPath?: string
   lensFov?: number
   keyframes?: TimelineClip['keyframes']
   colorAdjust?: ClipColorAdjust
@@ -339,6 +348,10 @@ export interface ElectronAPI {
   scanFolder: (
     dirPath: string
   ) => Promise<{ ok: boolean; videos: string[]; photos: string[]; audios: string[] }>
+  combineInsvPair: (opts: {
+    backPath: string
+    frontPath: string
+  }) => Promise<{ ok: boolean; outputPath?: string; error?: string }>
   findInsvPair: (insvPath: string) => Promise<{
     ok: boolean
     pairPath: string | null
