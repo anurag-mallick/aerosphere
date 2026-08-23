@@ -3,3 +3,7 @@ dist/
 .DS_Store
 *.log
 release/
+Demo video/
+*.insv
+*.lrv
+*.LRV

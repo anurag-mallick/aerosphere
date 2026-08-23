@@ -20,6 +20,12 @@ export interface LibraryVideo {
   processing?: boolean
   converting?: boolean
   is360?: boolean
+  /** stitched equirectangular (vs raw dual-fisheye .insv) */
+  equirect?: boolean
+  /** sibling lens file for dual-fisheye .insv pairs */
+  pairPath?: string | null
+  /** pre-stitched low-res LRV proxy shipped next to the .insv files */
+  lrvPath?: string | null
 }
 
 export interface LibraryPhoto {
@@ -129,6 +135,8 @@ export interface TimelineClip {
   speed?: number
   /** dual-fisheye / equirectangular source -> reframe with v360 instead of crop */
   is360?: boolean
+  /** source is already-stitched equirectangular footage */
+  equirect?: boolean
   /** source lens FOV used when converting dual-fisheye input */
   lensFov?: number
   keyframes?: ClipKeyframe[]
@@ -211,6 +219,7 @@ export interface ExportVisualClip {
   duration: number
   speed?: number
   is360?: boolean
+  equirect?: boolean
   lensFov?: number
   keyframes?: TimelineClip['keyframes']
   colorAdjust?: ClipColorAdjust
@@ -318,6 +327,23 @@ export interface ElectronAPI {
     dataUrl: string,
     defaultName: string
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
+  findInsvPair: (insvPath: string) => Promise<{
+    ok: boolean
+    pairPath: string | null
+    lrvPath?: string | null
+    error?: string
+  }>
+  stitchInsv: (opts: {
+    frontPath: string
+    backPath: string
+    lensFov?: number
+    swapLenses?: boolean
+    quality?: 'preview' | 'standard' | 'master'
+    lrvPath?: string | null
+  }) => Promise<{ ok: boolean; outputPath?: string; error?: string }>
+  onStitchProgress: (
+    callback: (progress: { percent: number }) => void
+  ) => () => void
 
   exportTimeline: (options: ExportTimelineOptions) => Promise<ExportResult>
   cancelExport: () => Promise<{ ok: boolean }>

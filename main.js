@@ -335,6 +335,104 @@ ipcMain.handle('save-png', async (_event, dataUrl, defaultName) => {
   }
 });
 
+// Insta360 X3: find the sibling lens file and the pre-stitched LRV proxy
+const { findInsvPairName } = require('./src-shared/stitch-filter');
+const { buildStitchGraph } = require('./src-shared/stitch-filter');
+
+ipcMain.handle('find-insv-pair', async (_event, insvPath) => {
+  try {
+    const parsed = path.parse(insvPath);
+    const siblings = fs
+      .readdirSync(parsed.dir)
+      .filter((f) => f.toLowerCase().endsWith('.insv') && f !== parsed.base);
+    const pairName = findInsvPairName(parsed.base, siblings);
+    if (!pairName) return { ok: true, pairPath: null };
+
+    const pairPath = path.join(parsed.dir, pairName);
+
+    // LRV preview proxy shares the recording timestamp with either lens file
+    const lrvSibling = fs
+      .readdirSync(parsed.dir)
+      .find((f) => f.toLowerCase().endsWith('.lrv') && f.includes(parsed.name.slice(4, 19)));
+    return { ok: true, pairPath, lrvPath: lrvSibling ? path.join(parsed.dir, lrvSibling) : null };
+  } catch (err) {
+    return { ok: false, pairPath: null, error: err.message };
+  }
+});
+
+const STITCH_QUALITY = {
+  preview: { width: 1536, height: 768, crf: '26', preset: 'veryfast' },
+  standard: { width: 3840, height: 1920, crf: '23', preset: 'medium' },
+  master: { width: 5760, height: 2880, crf: '20', preset: 'slow' },
+};
+
+ipcMain.handle('stitch-insv', async (_event, opts) => {
+  const { frontPath, backPath, lensFov, swapLenses, quality = 'standard', lrvPath } = opts;
+  const q = STITCH_QUALITY[quality] || STITCH_QUALITY.standard;
+  const parsed = path.parse(frontPath);
+  const outputPath = path.join(parsed.dir, `${parsed.name}-stitch-${q.width}x${q.height}.mp4`);
+
+  const yawA = swapLenses ? 90 : -90;
+  const yawB = swapLenses ? -90 : 90;
+  const { args: fcArgs } = buildStitchGraph({
+    width: q.width,
+    height: q.height,
+    fps: 30,
+    lensFov,
+    yawA,
+    yawB,
+  });
+
+  // big-file handling: HEVC halves the size of large equirect masters
+  const vcodec = quality === 'master' ? ['libx265', '-crf', q.crf, '-preset', q.preset] : ['libx264', '-crf', q.crf, '-preset', q.preset];
+
+  return new Promise((resolve) => {
+    let lastPct = -10;
+    ffmpeg()
+      .input(frontPath)
+      .input(backPath)
+      .on('progress', (p) => {
+        if (typeof p.percent === 'number') {
+          const pct = Math.min(99, p.percent);
+          if (pct - lastPct >= 2) {
+            lastPct = pct;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('stitch-progress', { percent: pct });
+            }
+          }
+        }
+      })
+      .on('error', (err) => resolve({ ok: false, error: err.message }))
+      .on('end', async () => {
+        // big-file handling: remux the camera's own 1024x512 LRV as an
+        // instant playback proxy for the stitched master (stream copy, ~1s)
+        try {
+          if (lrvPath && fs.existsSync(lrvPath)) {
+            await new Promise((res2) => {
+              ffmpeg(lrvPath)
+                .outputOptions(['-c', 'copy', '-movflags', '+faststart'])
+                .on('error', () => res2())
+                .on('end', () => res2())
+                .save(path.join(parsed.dir, `${parsed.name}.aeroproxy.mp4`));
+            });
+          }
+        } catch {
+          // proxy is optional
+        }
+        resolve({ ok: true, outputPath });
+      })
+      .outputOptions([
+        ...fcArgs,
+        ...['-c:v', vcodec[0], '-preset', vcodec[1], '-crf', vcodec[2]],
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '160k',
+        '-movflags', '+faststart',
+      ])
+      .save(outputPath);
+  });
+});
+
 // DJI drones (and others) record a telemetry .srt next to the video with the
 // same basename - detect it so the renderer can offer burn-in.
 ipcMain.handle('find-subtitle', async (_event, videoPath) => {

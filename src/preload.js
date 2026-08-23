@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   findSubtitle: (videoPath) => ipcRenderer.invoke('find-subtitle', videoPath),
   generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
   savePng: (dataUrl, defaultName) => ipcRenderer.invoke('save-png', dataUrl, defaultName),
+  findInsvPair: (insvPath) => ipcRenderer.invoke('find-insv-pair', insvPath),
+  stitchInsv: (opts) => ipcRenderer.invoke('stitch-insv', opts),
+  onStitchProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('stitch-progress', listener);
+    return () => ipcRenderer.removeListener('stitch-progress', listener);
+  },
   generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
 
   // export pipeline

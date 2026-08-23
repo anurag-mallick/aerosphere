@@ -676,6 +676,7 @@ async function runExport(options) {
 
       const plan = buildReframePlan({
         is360: !!clip.is360,
+        equirect: !!clip.equirect,
         lensFov: clip.lensFov,
         width: dims.w,
         height: dims.h,

@@ -13,6 +13,9 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 - **Perspective presets** — Natural, Wide, Ultra Wide, Narrow, Fisheye, Tiny Planet, Crystal Ball
 - **Lens FOV control** — tune dual-fisheye input calibration per clip
 - **Auto-detection** of `.insv` and 2:1 equirectangular sources
+- **Dual-file stitching** — importing either lens file auto-pairs both X3 `.insv` files into one 360° item; 🌐 **Stitch** renders a true equirectangular master (Preview 1536×768 / Standard 3840×1920 / Master 5760×2880 HEVC) with adjustable lens FOV (default 220°)
+- If the paired lens file is missing, the solo file imports as a single-lens view
+- Big-file friendly: masters use HEVC + faststart, and the camera's own LRV preview is remuxed instantly into a playback proxy for smooth scrubbing
 - Live **view overlay** in the preview showing exactly what the virtual camera sees
 
 ### DJI Mini 5 Pro / drone workflows

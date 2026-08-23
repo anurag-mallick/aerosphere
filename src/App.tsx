@@ -166,6 +166,7 @@ function App() {
   const [ffmpegVersion, setFfmpegVersion] = useState<string | null>(null)
   const [convertingVideoId, setConvertingVideoId] = useState<string | null>(null)
   const [proxyBusyVideoId, setProxyBusyVideoId] = useState<string | null>(null)
+  const [stitchingVideoId, setStitchingVideoId] = useState<string | null>(null)
   const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
@@ -456,6 +457,7 @@ function App() {
         sourceDuration: video.duration || 5,
         speed: 1,
         is360: video.is360 ?? false,
+        equirect: video.equirect ?? false,
         keyframes: [],
         volume: 1,
         fadeIn: 0,
@@ -503,13 +505,48 @@ function App() {
       const paths = await pickFiles(VIDEO_FILTERS)
       if (!paths || paths.length === 0) return
 
-      const newItems: LibraryVideo[] = paths.map((p) => ({
+      // Insta360 X3 dual-lens pairing: importing EITHER .insv of a pair
+      // imports the whole 360 video. If the sibling lens file is missing,
+      // the single file is imported on its own (one-side camera view).
+      const seen = new Set<string>()
+      const queued: { path: string; pairPath: string | null; lrvPath: string | null }[] = []
+      for (const p of paths) {
+        if (seen.has(p)) continue
+        seen.add(p)
+        if (!/\.insv$/i.test(p)) {
+          queued.push({ path: p, pairPath: null, lrvPath: null })
+          continue
+        }
+        try {
+          const r = await window.electronAPI.findInsvPair(p)
+          const pair = r.ok ? r.pairPath : null
+          if (pair && !seen.has(pair)) {
+            seen.add(pair)
+            queued.push({ path: p, pairPath: pair, lrvPath: r.lrvPath ?? null })
+          } else if (pair && seen.has(pair)) {
+            // counterpart already queued — attach as its pair
+            const existing = queued.find((q) => q.path === pair)
+            if (existing) existing.pairPath = p
+          }
+        } catch {
+          queued.push({ path: p, pairPath: null, lrvPath: null })
+        }
+      }
+
+      const friendlyName = (p: string, pair: string | null) => {
+        const base = fileNameOf(p)
+        return pair ? base.replace(/_(00|10)_/i, '_') : base
+      }
+
+      const newItems: LibraryVideo[] = queued.map((q) => ({
         id: uid('vid'),
-        name: fileNameOf(p),
-        path: p,
-        format: /\.insv$/i.test(p) ? 'insv' : /\.mp4$/i.test(p) ? 'mp4' : 'other',
+        name: friendlyName(q.path, q.pairPath),
+        path: q.path,
+        format: /\.insv$/i.test(q.path) ? 'insv' : /\.mp4$/i.test(q.path) ? 'mp4' : 'other',
         duration: 0,
         processing: true,
+        pairPath: q.pairPath,
+        lrvPath: q.lrvPath,
       }))
       setVideos((prev) => [...prev, ...newItems])
 
@@ -522,6 +559,19 @@ function App() {
           const is360 =
             item.format === 'insv' ||
             (metadata.width > 0 && metadata.height > 0 && metadata.width / metadata.height > 1.9 && metadata.width / metadata.height < 2.15)
+          let pairPath: string | null = null
+          let lrvPath: string | null = null
+          if (item.format === 'insv') {
+            try {
+              const pair = await window.electronAPI.findInsvPair(item.path)
+              if (pair.ok) {
+                pairPath = pair.pairPath
+                lrvPath = pair.lrvPath ?? null
+              }
+            } catch {
+              // optional feature
+            }
+          }
           setVideos((prev) =>
             prev.map((v) =>
               v.id === item.id
@@ -531,6 +581,8 @@ function App() {
                     duration: metadata.duration,
                     thumbnail,
                     is360,
+                    pairPath,
+                    lrvPath,
                     metadata: {
                       resolution: metadata.width && metadata.height ? `${metadata.width}×${metadata.height}` : undefined,
                       fps: metadata.fps ?? undefined,
@@ -612,6 +664,55 @@ function App() {
         else setNotice(res.existed ? 'Proxy already exists — preview will use it.' : '480p proxy ready — high-res footage now previews smoothly.')
       } finally {
         setProxyBusyVideoId(null)
+      }
+    },
+    [videos]
+  )
+
+  // ---------------------------------------------- Insta360 X3 dual-file stitch
+  const stitchInsvPair = useCallback(
+    async (id: string, quality: 'preview' | 'standard' | 'master' = 'preview') => {
+      const video = videos.find((v) => v.id === id)
+      if (!video?.pairPath) return
+      setStitchingVideoId(id)
+      setError(null)
+      let unsub: (() => void) | null = null
+      try {
+        unsub = window.electronAPI.onStitchProgress((p) => {
+          setLoadingMessage(`Stitching 360° pair… ${Math.round(p.percent)}%`)
+        })
+        setLoadingMessage('Stitching 360° pair…')
+        const res = await window.electronAPI.stitchInsv({
+          frontPath: video.path,
+          backPath: video.pairPath,
+          quality,
+          lrvPath: video.lrvPath,
+        })
+        if (!res.ok || !res.outputPath) {
+          setError(`Stitch failed: ${res.error}`)
+          return
+        }
+        const meta = await fetchVideoMetadata(res.outputPath)
+        const thumbnail = await fetchThumbnail(res.outputPath, 1)
+        setVideos((prev) => [
+          ...prev,
+          {
+            id: uid('vid'),
+            name: fileNameOf(res.outputPath!),
+            path: res.outputPath!,
+            format: 'mp4',
+            duration: meta.duration,
+            thumbnail,
+            is360: true,
+            equirect: true,
+            metadata: { is360: true },
+          },
+        ])
+        setNotice(`360° video stitched: ${fileNameOf(res.outputPath)} — add it to the timeline to reframe.`)
+      } finally {
+        unsub?.()
+        setLoadingMessage(null)
+        setStitchingVideoId(null)
       }
     },
     [videos]
@@ -844,6 +945,7 @@ function App() {
           audioDenoise: c.audioDenoise,
           audioNormalize: c.audioNormalize,
           rotate90: c.rotate90,
+          equirect: c.equirect,
           dissolveIn: c.dissolveIn,
           kenBurns: c.kenBurns,
           eqBass: c.eqBass || 0,
@@ -942,8 +1044,10 @@ function App() {
           onRemovePhoto={removePhoto}
           onRemoveAudio={removeAudio}
           onConvertInsv={convertInsv}
-          proxyBusyVideoId={proxyBusyVideoId}
           onGenerateProxy={generateProxy}
+          proxyBusyVideoId={proxyBusyVideoId}
+          onStitchInsv={stitchInsvPair}
+          stitchingVideoId={stitchingVideoId}
         />
 
         <div className="right-column">

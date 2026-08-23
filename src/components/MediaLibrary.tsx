@@ -19,12 +19,16 @@ interface MediaLibraryProps {
   onRemovePhoto: (id: string) => void
   onRemoveAudio: (id: string) => void
   onConvertInsv: (id: string) => void
+  onStitchInsv: (id: string) => void
+  stitchingVideoId: string | null
 }
 
 function metaLine(video: LibraryVideo): string {
   if (video.processing) return 'Reading…'
   const parts: string[] = []
   parts.push(video.format === 'insv' ? 'Insta360' : video.format === 'mp4' ? 'MP4' : 'Video')
+  if (video.pairPath) parts.push('dual-lens pair')
+  else if (video.format === 'insv') parts.push('single lens')
   if (video.duration > 0) {
     const mins = Math.floor(video.duration / 60)
     const secs = Math.floor(video.duration % 60)
@@ -38,18 +42,24 @@ function VideoCard({
   video,
   converting,
   proxyBusy,
+  stitching,
+  hasPair,
   onAdd,
   onRemove,
   onConvert,
   onProxy,
+  onStitch,
 }: {
   video: LibraryVideo
   converting: boolean
   proxyBusy: boolean
+  stitching: boolean
+  hasPair: boolean
   onAdd: () => void
   onRemove: () => void
   onConvert: () => void
   onProxy: () => void
+  onStitch: () => void
 }) {
   return (
     <div className="library-item">
@@ -83,6 +93,11 @@ function VideoCard({
               Convert
             </button>
           )}
+          {video.format === 'insv' && hasPair && (
+            <button className="btn-tiny" onClick={onStitch} disabled={stitching} title="Stitch the paired lens files into one equirectangular 360° video">
+              🌐 Stitch
+            </button>
+          )}
           <button
             className="btn-tiny"
             onClick={onProxy}
@@ -101,7 +116,7 @@ function VideoCard({
 }
 
 export function MediaLibrary(props: MediaLibraryProps) {
-  const { videos, photos, audios, convertingVideoId, proxyBusyVideoId } = props
+  const { videos, photos, audios, convertingVideoId, proxyBusyVideoId, stitchingVideoId } = props
 
   return (
     <aside className="sidebar">
@@ -122,6 +137,9 @@ export function MediaLibrary(props: MediaLibraryProps) {
                 video={v}
                 converting={convertingVideoId === v.id}
                 proxyBusy={proxyBusyVideoId === v.id}
+                stitching={stitchingVideoId === v.id}
+                hasPair={!!v.pairPath}
+                onStitch={() => props.onStitchInsv(v.id)}
                 onProxy={() => props.onGenerateProxy(v.id)}
                 onAdd={() => props.onAddVideo(v)}
                 onRemove={() => props.onRemoveVideo(v.id)}
