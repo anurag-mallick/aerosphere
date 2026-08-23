@@ -1,6 +1,6 @@
 {
   "name": "aerosphere",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Unified video editing application for Insta 360 X3 (.insv) and DJI Mini 5 Pro videos",
   "main": "main.js",
   "scripts": {
