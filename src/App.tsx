@@ -887,6 +887,11 @@ const [exportResolution, setExportResolution] =
         try {
           const metadata = await fetchVideoMetadata(result.outputPath)
           const thumbnail = await fetchThumbnail(result.outputPath, 1)
+          // a remux keeps the original dual-fisheye layout — force it instead
+          // of trusting the (now .mp4) extension-based detection
+          const det = detect360Projection(result.outputPath!, metadata.width, metadata.height)
+          const projection: 'dfisheye' | 'equirect' =
+            video.projection ?? det.projection ?? 'dfisheye'
           setVideos((prev) => [
             ...prev,
             {
@@ -896,12 +901,15 @@ const [exportResolution, setExportResolution] =
               format: 'mp4',
               duration: metadata.duration,
               thumbnail,
+              is360: true,
+              projection,
               metadata: {
                 resolution:
                   metadata.width && metadata.height ? `${metadata.width}×${metadata.height}` : undefined,
                 fps: metadata.fps ?? undefined,
                 codec: metadata.codec ?? undefined,
                 hasAudio: metadata.hasAudio,
+                is360: true,
               },
             },
           ])
