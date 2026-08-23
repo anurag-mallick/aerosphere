@@ -87,6 +87,10 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 - Per-file pickers in each library section
 - Insta360 X3 dual-lens `.insv` pairs auto-merge into one 360° item
 
+### Session behavior
+Projects live for the current session only — quitting or closing AeroSphere
+resets everything to a clean slate on next launch (by design).
+
 ### Launch like a normal app
 Double-click **`AeroSphere.command`** in Finder.
 

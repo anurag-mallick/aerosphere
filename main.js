@@ -171,6 +171,35 @@ function createWindow() {
     title: 'AeroSphere',
   });
 
+  // Reset-to-defaults on close/quit: wipe the persisted project right before
+  // the window goes away, so every launch starts from a clean slate.
+  // (Done here — not in the renderer — so dev reloads keep their state.)
+  let clearedOnClose = false;
+  mainWindow.webContents.on('did-finish-load', () => {
+    clearedOnClose = false;
+  });
+  const clearProjectAndClose = () => {
+    if (clearedOnClose) return;
+    clearedOnClose = true;
+    mainWindow.webContents
+      .executeJavaScript(
+        `(function(){try{Object.keys(localStorage).filter(function(k){return k.indexOf('ve:')===0}).forEach(function(k){localStorage.removeItem(k)})}catch(e){}})();'ok'`
+      )
+      .catch(() => {})
+      .finally(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      });
+  };
+  mainWindow.on('close', (event) => {
+    if (!clearedOnClose) {
+      event.preventDefault();
+      clearProjectAndClose();
+    }
+  });
+  app.on('before-quit', () => {
+    if (!clearedOnClose && mainWindow && !mainWindow.isDestroyed()) clearProjectAndClose();
+  });
+
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -195,6 +224,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  // last window gone (macOS red-button included): the project was already
+  // wiped by the window's close handler above — nothing else to do here,
+  // but keep platform behavior intact.
   if (process.platform !== 'darwin') {
     app.quit();
   }
