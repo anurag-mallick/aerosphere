@@ -42,6 +42,7 @@
     "files": [
       "main.js",
       "export-pipeline.js",
+      "src-shared/**/*",
       "keyframe-filter.js",
       "dist/**/*",
       "src/preload.js"

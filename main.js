@@ -6,28 +6,12 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
 const ffmpeg = require('fluent-ffmpeg');
+const { resolveBinary, probeFile, extractMetadata } = require('./src-shared/ffmpeg-utils');
 
 // ---------------------------------------------------------------------------
-// FFmpeg / FFprobe setup
+// FFmpeg setup (fluent-ffmpeg is used for thumbnails and .insv remux;
+// probing lives in src-shared/ffmpeg-utils.js)
 // ---------------------------------------------------------------------------
-
-function resolveBinary(name) {
-  const candidates = [
-    process.env[`${name.toUpperCase()}_PATH`],
-    `/opt/homebrew/bin/${name}`,
-    `/usr/local/bin/${name}`,
-    `/usr/bin/${name}`,
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // keep looking
-    }
-  }
-  return name; // fall back to PATH lookup
-}
 
 ffmpeg.setFfmpegPath(resolveBinary('ffmpeg'));
 ffmpeg.setFlvtoolPath(resolveBinary('ffprobe'));
@@ -47,12 +31,6 @@ function detectFfmpegVersion() {
       const m = /ffmpeg version (\S+)/.exec(out);
       resolve(m ? m[1] : 'unknown');
     });
-  });
-}
-
-function probeFile(filePath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, data) => (err ? reject(err) : resolve(data)));
   });
 }
 
@@ -230,34 +208,6 @@ ipcMain.handle('check-ffmpeg', async () => {
   }
   return { available: !!ffmpegVersion, version: ffmpegVersion };
 });
-
-function extractMetadata(data) {
-  const videoStream =
-    data.streams.find((s) => s.codec_type === 'video' && s.disposition && s.disposition.attached_pic !== 1) ||
-    data.streams.find((s) => s.codec_type === 'video');
-  const audioStream = data.streams.find((s) => s.codec_type === 'audio');
-
-  let fps = null;
-  if (videoStream && videoStream.r_frame_rate && videoStream.r_frame_rate.includes('/')) {
-    const [num, den] = videoStream.r_frame_rate.split('/').map(Number);
-    if (num > 0 && den > 0) fps = Math.round((num / den) * 100) / 100;
-  }
-
-  return {
-    duration: Number(data.format && data.format.duration) || 0,
-    width: (videoStream && videoStream.width) || 0,
-    height: (videoStream && videoStream.height) || 0,
-    codec: (videoStream && videoStream.codec_name) || null,
-    fps,
-    hasAudio: !!audioStream,
-    rotation:
-      videoStream &&
-      ((videoStream.side_data_list &&
-        videoStream.side_data_list.find((d) => d.rotation != null)?.rotation) ||
-        videoStream.tags?.rotate ||
-        null),
-  };
-}
 
 ipcMain.handle('get-video-metadata', async (_event, filePath) => {
   try {
