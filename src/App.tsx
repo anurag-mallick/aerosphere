@@ -6,6 +6,7 @@ import type {
   LibraryPhoto,
   LibraryVideo,
   TimelineClip,
+  TimelineMarker,
   TimelineTrack,
   TrackType,
 } from './types/editor'
@@ -24,6 +25,8 @@ import { MediaLibrary } from './components/MediaLibrary'
 import { PreviewPlayer } from './components/PreviewPlayer'
 import { Timeline } from './components/Timeline'
 import { Inspector } from './components/Inspector'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { useProjectHistory } from './hooks/useProjectHistory'
 import { fileNameOf, formatTime, uid, clamp } from './utils/format'
 import { interpolateChannel, computeViewRect, type ViewRect } from './utils/keyframes'
 
@@ -54,6 +57,15 @@ const RESOLUTION_GROUPS: { label: string; keys: string[] }[] = [
 
 const FPS_OPTIONS = [24, 25, 30, 50, 60]
 
+const DELIVERY_PRESETS: { name: string; res: keyof typeof RESOLUTION_PRESETS; fps: 24 | 25 | 30 | 50 | 60; codec: 'h264' | 'h265' }[] = [
+  { name: 'YouTube / Web — 1080p', res: '1080', fps: 30, codec: 'h264' },
+  { name: 'YouTube / Web — 4K', res: '2160', fps: 30, codec: 'h265' },
+  { name: 'Instagram Reels / TikTok', res: 'v1080', fps: 30, codec: 'h264' },
+  { name: 'Square feed post', res: 'sq1080', fps: 30, codec: 'h264' },
+  { name: 'Cinematic master — 2.39:1 @ 24p', res: 'cine', fps: 24, codec: 'h265' },
+  { name: 'Archive master (best quality)', res: '2160', fps: 30, codec: 'h265' },
+]
+
 function makeDefaultTracks(): TimelineTrack[] {
   return [
     { id: uid('track'), name: 'Video 1', type: 'video', isVisible: true, clips: [] },
@@ -62,19 +74,40 @@ function makeDefaultTracks(): TimelineTrack[] {
 }
 
 interface PersistedProject {
+  schemaVersion?: number
   videos: LibraryVideo[]
   photos: LibraryPhoto[]
   audios: LibraryAudio[]
   tracks: TimelineTrack[]
+  markers: TimelineMarker[]
+}
+
+const PROJECT_SCHEMA_VERSION = 2
+
+/** sequential migrations; index N migrates version N -> N+1 */
+const MIGRATIONS: Record<number, (p: PersistedProject) => PersistedProject> = {
+  // 1 -> 2: additive fields only (markers, clip.title, audio flags) - no-op,
+  // but guarantees every project carries the new shape going forward.
+  1: (p) => ({ ...p, markers: Array.isArray(p.markers) ? p.markers : [] }),
 }
 
 function loadProject(): PersistedProject | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const data = JSON.parse(raw) as PersistedProject
+    let data = JSON.parse(raw) as PersistedProject
     if (!Array.isArray(data.videos) || !Array.isArray(data.tracks)) return null
     data.tracks = data.tracks.map((t) => ({ ...t, clips: Array.isArray(t.clips) ? t.clips : [] }))
+    if (!Array.isArray(data.photos)) data.photos = []
+    if (!Array.isArray(data.audios)) data.audios = []
+    if (!Array.isArray(data.markers)) data.markers = []
+
+    const from = typeof data.schemaVersion === 'number' ? data.schemaVersion : 1
+    for (let v = from; v < PROJECT_SCHEMA_VERSION; v++) {
+      const migrate = MIGRATIONS[v]
+      data = migrate ? migrate(data) : data
+    }
+    data.schemaVersion = PROJECT_SCHEMA_VERSION
     return data
   } catch {
     return null
@@ -104,14 +137,33 @@ function App() {
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
   const [exportCodec, setExportCodec] = useState<'h264' | 'h265'>('h264')
+  const [deliveryPreset, setDeliveryPreset] = useState('YouTube / Web — 1080p')
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportState, setExportState] = useState<ExportProgress | null>(null)
+  const [markers, setMarkers] = useState<TimelineMarker[]>(saved.current?.markers ?? [])
+  const [showShortcuts, setShowShortcuts] = useState(false)
+
+  // ------------------------------------------------------- undo / redo (Cmd+Z)
+  const projectSnapshot = useMemo(
+    () => ({ videos, photos, audios, tracks }),
+    [videos, photos, audios, tracks]
+  )
+  const applySnapshot = useCallback((snap: typeof projectSnapshot) => {
+    setVideos(snap.videos)
+    setPhotos(snap.photos)
+    setAudios(snap.audios)
+    setTracks(snap.tracks)
+  }, [])
+  const { undo, redo, canUndo, canRedo } = useProjectHistory(projectSnapshot, applySnapshot)
 
   // ------------------------------------------------------------------ persist
   const storageWarnRef = useRef(false)
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ videos, photos, audios, tracks }))
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ schemaVersion: PROJECT_SCHEMA_VERSION, videos, photos, audios, tracks, markers })
+      )
       storageWarnRef.current = false
     } catch {
       // surface quota failures once per failure streak instead of every save
@@ -122,7 +174,7 @@ function App() {
         )
       }
     }
-  }, [videos, photos, audios, tracks])
+  }, [videos, photos, audios, tracks, markers])
 
   // -------------------------------------------------------------- ffmpeg init
   useEffect(() => {
@@ -522,6 +574,15 @@ function App() {
   )
 
   // ---------------------------------------------------------------- keyboard
+  const addMarker = useCallback(() => {
+    setMarkers((prev) => [...prev, { id: uid('mark'), time: Math.round(engine.currentTime * 100) / 100 }])
+    setNotice(null)
+  }, [engine.currentTime])
+
+  const removeMarker = useCallback((id: string) => {
+    setMarkers((prev) => prev.filter((m) => m.id !== id))
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
@@ -532,16 +593,27 @@ function App() {
       } else if (e.key === 's' || e.key === 'S') {
         e.preventDefault()
         splitSelectedClip()
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
       } else if (e.code === 'Space') {
         e.preventDefault()
         engine.toggle()
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault()
+        addMarker()
+      } else if (e.key === '?') {
+        e.preventDefault()
+        setShowShortcuts((v) => !v)
       } else if (e.key === 'Escape') {
         setSelectedClipId(null)
+        setShowShortcuts(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedClipId, deleteClip, splitSelectedClip, engine])
+  }, [selectedClipId, deleteClip, splitSelectedClip, engine, undo, redo, addMarker])
 
   // ------------------------------------------------------------------- export
   const runExport = useCallback(async () => {
@@ -599,6 +671,10 @@ function App() {
           fadeOut: c.fadeOut,
           volume: c.volume,
           muted: c.muted,
+          title: c.title,
+          audioDenoise: c.audioDenoise,
+          audioNormalize: c.audioNormalize,
+          rotate90: c.rotate90,
           logNormalize: c.logNormalize,
           lutPath: c.lutPath,
           subtitlesPath: c.burnSubtitles && c.srtPath ? c.srtPath : null,
@@ -608,6 +684,9 @@ function App() {
           position: c.position,
           trimIn: c.trimIn,
           duration: c.duration,
+          duck: c.duckUnderVideo,
+          denoise: c.audioDenoise,
+          normalize: c.audioNormalize,
         })),
       })
 
@@ -643,6 +722,13 @@ function App() {
           </span>
         </div>
         <div className="controls">
+          <button
+            className="btn-small"
+            title="Keyboard shortcuts (?)"
+            onClick={() => setShowShortcuts((v) => !v)}
+          >
+            ⌨ Shortcuts
+          </button>
           <button className="btn-primary" onClick={openExportDialog}>
             Export Movie
           </button>
@@ -661,6 +747,7 @@ function App() {
         </div>
       )}
 
+      <ErrorBoundary>
       <main className="main-content">
         <MediaLibrary
           videos={videos}
@@ -687,6 +774,10 @@ function App() {
               engine.activePhotoClip ? mediaUrl(engine.activePhotoClip.path) : null
             }
             viewRect={viewRect}
+            activeTitle={
+              (engine.activeVideoClip ?? engine.activePhotoClip)?.title ?? null
+            }
+            rotate90={(engine.activeVideoClip ?? engine.activePhotoClip)?.rotate90 ?? 0}
             currentTime={engine.currentTime}
             totalDuration={engine.totalDuration}
             isPlaying={engine.isPlaying}
@@ -714,6 +805,13 @@ function App() {
             onZoomChange={(pps) => setPxPerSec(Math.min(400, Math.max(2, pps)))}
             onSplit={splitSelectedClip}
             canSplit={canSplit}
+            markers={markers}
+            onAddMarker={addMarker}
+            onRemoveMarker={removeMarker}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={canUndo}
+            canRedo={canRedo}
           />
         </div>
 
@@ -724,11 +822,59 @@ function App() {
           onChangeSpeed={changeSelectedSpeed}
         />
       </main>
+      </ErrorBoundary>
+
+      {showShortcuts && (
+        <div className="loading-overlay" onClick={() => setShowShortcuts(false)}>
+          <div className="export-card" onClick={(e) => e.stopPropagation()}>
+            <h3>Keyboard shortcuts</h3>
+            <table className="shortcut-table">
+              <tbody>
+                <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+                <tr><td><kbd>S</kbd></td><td>Split selected clip at playhead</td></tr>
+                <tr><td><kbd>M</kbd></td><td>Add timeline marker</td></tr>
+                <tr><td><kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd></td><td>Undo / redo</td></tr>
+                <tr><td><kbd>Delete</kbd></td><td>Remove selected clip</td></tr>
+                <tr><td><kbd>Esc</kbd></td><td>Deselect / close dialogs</td></tr>
+              </tbody>
+            </table>
+            <div className="dialog-actions">
+              <button className="btn-primary" onClick={() => setShowShortcuts(false)}>
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showExportDialog && !exportState && (
         <div className="loading-overlay">
           <div className="export-card">
             <h3>Export settings</h3>
+            <div className="form-row">
+              <label htmlFor="delivery-preset">Preset</label>
+              <select
+                id="delivery-preset"
+                value={deliveryPreset}
+                onChange={(e) => {
+                  const name = e.target.value
+                  setDeliveryPreset(name)
+                  const preset = DELIVERY_PRESETS.find((p) => p.name === name)
+                  if (preset) {
+                    setExportResolution(preset.res)
+                    setExportFps(preset.fps)
+                    setExportCodec(preset.codec)
+                  }
+                }}
+              >
+                {DELIVERY_PRESETS.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+                <option value="Custom">Custom…</option>
+              </select>
+            </div>
             <div className="form-row">
               <label htmlFor="export-resolution">Resolution</label>
               <select

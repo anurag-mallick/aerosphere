@@ -93,6 +93,8 @@ export interface ClipColorAdjust {
   temperature?: number
   /** -1..1 green/magenta balance */
   tint?: number
+  /** -1..1 mapped to gamma 1+v */
+  gamma?: number
 }
 
 export interface TimelineClip {
@@ -135,6 +137,29 @@ export interface TimelineClip {
   burnSubtitles?: boolean
   /** silence this clip's own audio in preview and export */
   muted?: boolean
+  /** FFmpeg afftdn noise reduction on this clip's audio */
+  audioDenoise?: boolean
+  /** normalize this clip's audio to -16 LUFS */
+  audioNormalize?: boolean
+  /** music clip: automatically dip under dialogue/video audio */
+  duckUnderVideo?: boolean
+  /** static quarter-turn rotation applied to this clip only */
+  rotate90?: 0 | 90 | 180 | 270
+  /** burned-in text overlay (titles à la FCP/Resolve) */
+  title?: ClipTitle
+}
+
+export interface ClipTitle {
+  text: string
+  /** font size in px at export resolution */
+  size: number
+  position: 'top' | 'bottom'
+}
+
+export interface TimelineMarker {
+  id: string
+  /** seconds on the timeline */
+  time: number
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +198,10 @@ export interface ExportVisualClip {
   lutPath?: string
   subtitlesPath?: string | null
   muted?: boolean
+  title?: ClipTitle
+  audioDenoise?: boolean
+  audioNormalize?: boolean
+  rotate90?: 0 | 90 | 180 | 270
 }
 
 export interface ExportMusicClip {
@@ -180,6 +209,10 @@ export interface ExportMusicClip {
   position: number
   trimIn: number
   duration: number
+  /** duck this music clip under video/dialogue audio (sidechain) */
+  duck?: boolean
+  denoise?: boolean
+  normalize?: boolean
 }
 
 export interface ExportTimelineOptions {

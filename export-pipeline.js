@@ -106,6 +106,7 @@ function colorEqArgs(colorAdjust) {
   if (colorAdjust.brightness) parts.push(`brightness=${clamp(colorAdjust.brightness, -1, 1).toFixed(3)}`);
   if (colorAdjust.contrast) parts.push(`contrast=${(1 + clamp(colorAdjust.contrast, -0.99, 2)).toFixed(3)}`);
   if (colorAdjust.saturation) parts.push(`saturation=${(1 + clamp(colorAdjust.saturation, -0.99, 2)).toFixed(3)}`);
+  if (colorAdjust.gamma) parts.push(`gamma=${(1 + clamp(colorAdjust.gamma, -0.99, 2)).toFixed(3)}`);
   const out = parts.length ? [`eq=${parts.join(':')}`] : [];
   if (colorAdjust.temperature) {
     const temp = 6500 + clamp(colorAdjust.temperature, -1, 1) * 2500;
@@ -159,6 +160,61 @@ function videoFadeArgs({ fadeIn, fadeOut }, segStartTl, segDurTl, clipDurTl) {
     out.push(`fade=t=out:st=${st.toFixed(3)}:d=${Math.min(fo, segDurTl).toFixed(3)}`);
   }
   return out;
+}
+
+/** drawtext text escaping: backslash, colon, apostrophe, percent */
+function escapeDrawtext(text) {
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\\\:')
+    .replace(/'/g, '’')
+    .replace(/%/g, '%%');
+}
+
+function resolveFont() {
+  const candidates = [
+    '/System/Library/Fonts/Supplemental/Arial.ttf',
+    '/System/Library/Fonts/Helvetica.ttc',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+    'C:/Windows/Fonts/arial.ttf',
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+/** quarter-turn helpers: transpose filters + swapped intermediate dimensions */
+function transposeArgs(rot90) {
+  const q = (((rot90 | 0) % 360) + 360) % 360;
+  if (q === 90) return ['transpose=1'];
+  if (q === 180) return ['transpose=1', 'transpose=1'];
+  if (q === 270) return ['transpose=2'];
+  return [];
+}
+
+function rotatedDims(rot90, width, height) {
+  const q = (((rot90 | 0) % 360) + 360) % 360;
+  return q % 180 === 90 ? { w: height, h: width } : { w: width, h: height };
+}
+
+/** burned-in title overlay filter for one clip */
+function titleArgs(title) {  if (!title || !title.text || !String(title.text).trim()) return [];
+  const font = resolveFont();
+  const fontPart = font ? `:fontfile='${font}'` : '';
+  const y = title.position === 'top' ? '24' : 'h-th-24';
+  return [
+    `drawtext=text='${escapeDrawtext(title.text)}':fontsize=${clamp(
+      Math.round(title.size || 42),
+      12,
+      300
+    )}:fontcolor=white:borderw=3:bordercolor=black@0.65:x='(w-text_w)/2':y=${y}${fontPart}`,
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +358,8 @@ async function runExport(options) {
 
       const colorFilters = colorEqArgs(clip.colorAdjust);
       const safeLut = copyLutToWorkDir(clip.lutPath, ci, workDir);
+      const rot = clip.rotate90 | 0;
+      const dims = rotatedDims(rot, width, height);
       let stabTransform = null;
 
       if (clip.kind === 'photo') {
@@ -311,6 +369,9 @@ async function runExport(options) {
           ...lutArgs(safeLut),
           ...colorFilters,
           ...videoFadeArgs(clip, 0, clip.duration, clip.duration),
+          ...titleArgs(clip.title),
+          `scale=${dims.w}:${dims.h}`,
+          ...transposeArgs(rot),
           `fps=${fps}`,
           'setsar=1',
         ].join(',');
@@ -332,8 +393,8 @@ async function runExport(options) {
       const plan = buildReframePlan({
         is360: !!clip.is360,
         lensFov: clip.lensFov,
-        width,
-        height,
+        width: dims.w,
+        height: dims.h,
         keyframes: clip.keyframes,
         trimIn: clip.trimIn,
         duration: clip.duration,
@@ -374,6 +435,8 @@ async function runExport(options) {
           ...(span.filter ? [span.filter] : []),
           ...colorFilters,
           ...videoFadeArgs(clip, segStartTl, segDurTl, clip.duration),
+          ...titleArgs(clip.title),
+          ...transposeArgs(rot),
           // compress wall-clock time for speed ramps (paren-free form)
           ...(Math.abs(speed - 1) > 1e-6
             ? [`setpts=PTS/${speed.toFixed(6)}-STARTPTS/${speed.toFixed(6)}`]
@@ -441,6 +504,8 @@ async function runExport(options) {
       const sources = [];
       let inputIdx = 1;
 
+      let firstVoiceInput = null; // input index of the first dialogue-bearing clip
+
       audioSources.forEach((src) => {
         args.push('-ss', String(src.trimIn), '-t', String(src.spanSource), '-i', src.path);
         const label = `v${inputIdx}`;
@@ -448,6 +513,10 @@ async function runExport(options) {
         const chainParts = [
           'aresample=44100',
           'aformat=channel_layouts=stereo',
+          // Voice Isolation-style cleanup (Fairlight/FCP inspired)
+          src.denoise ? 'afftdn=nr=12:nf=-25' : '',
+          // broadcast loudness normalization
+          src.normalize ? 'loudnorm=I=-16:TP=-1.5:LRA=11' : '',
           Math.abs(src.volume - 1) > 1e-6 ? `volume=${src.volume.toFixed(4)}` : '',
           tempo,
         ];
@@ -461,16 +530,31 @@ async function runExport(options) {
         chainParts.push(`adelay=${Math.round(src.delaySec * 1000)}|${Math.round(src.delaySec * 1000)}`);
         filters.push(`[${inputIdx}:a]${chainParts.filter(Boolean).join(',')}[${label}]`);
         sources.push(`[${label}]`);
+        if (firstVoiceInput === null) firstVoiceInput = inputIdx;
         inputIdx += 1;
       });
       musicClips.forEach((m, j) => {
         args.push('-ss', String(Math.max(0, m.trimIn)), '-t', String(m.duration), '-i', m.path);
-        const label = `m${j}`;
         const delayMs = Math.round(Math.max(0, m.position) * 1000);
-        filters.push(
-          `[${inputIdx}:a]aresample=44100,aformat=channel_layouts=stereo,adelay=${delayMs}|${delayMs}[${label}]`
-        );
-        sources.push(`[${label}]`);
+        const musicChain = [
+          'aresample=44100',
+          'aformat=channel_layouts=stereo',
+          m.denoise ? 'afftdn=nr=12:nf=-25' : '',
+          m.normalize ? 'loudnorm=I=-16:TP=-1.5:LRA=11' : '',
+          `adelay=${delayMs}|${delayMs}`,
+        ].filter(Boolean);
+        filters.push(`[${inputIdx}:a]${musicChain.join(',')}[m${j}raw]`);
+
+        if (m.duck && firstVoiceInput !== null) {
+          // Resolve/Fairlight-style ducker: music dips under dialogue via sidechain
+          filters.push(
+            `[m${j}raw][${firstVoiceInput}:a]sidechaincompress=` +
+              'threshold=0.02:ratio=6:attack=60:release=600[m' + j + ']'
+          );
+        } else {
+          filters.push(`[m${j}raw]anull[m${j}]`);
+        }
+        sources.push(`[m${j}]`);
         inputIdx += 1;
       });
 
@@ -539,4 +623,19 @@ async function runExport(options) {
   }
 }
 
-module.exports = { runExport, requestCancel, probeFile, extractMetadata };
+module.exports = {
+  runExport,
+  requestCancel,
+  probeFile,
+  extractMetadata,
+  // pure helpers (exposed for tests)
+  tempoChain,
+  colorEqArgs,
+  videoFadeArgs,
+  lutArgs,
+  copyLutToWorkDir,
+  parseSrt,
+  serializeSrt,
+  buildTimelineSubtitles,
+  clamp,
+};

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { TimelineClip, TimelineTrack, TrackType } from '../types/editor'
+import type { TimelineClip, TimelineMarker, TimelineTrack, TrackType } from '../types/editor'
 import { clamp } from '../utils/format'
 import { formatTime } from '../utils/format'
 import { DroneIcon, Insta360Icon, VideoIcon, PhotoIcon, AudioIcon, WaveIcon } from './icons'
@@ -39,6 +39,13 @@ interface TimelineProps {
   onZoomChange: (pxPerSec: number) => void
   onSplit: () => void
   canSplit: boolean
+  markers: TimelineMarker[]
+  onAddMarker: () => void
+  onRemoveMarker: (id: string) => void
+  onUndo: () => void
+  onRedo: () => void
+  canUndo: boolean
+  canRedo: boolean
 }
 
 /** source-aware icon: 360 cameras and drones get their own mark */
@@ -71,6 +78,9 @@ export function Timeline(props: TimelineProps) {
     onZoomChange,
     onSplit,
     canSplit,
+    markers,
+    onAddMarker,
+    onRemoveMarker,
   } = props
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -212,6 +222,15 @@ export function Timeline(props: TimelineProps) {
         >
           ✂ Split
         </button>
+        <button className="btn-small" onClick={props.onUndo} disabled={!props.canUndo} title="Undo (⌘Z)">
+          ↩ Undo
+        </button>
+        <button className="btn-small" onClick={props.onRedo} disabled={!props.canRedo} title="Redo (⇧⌘Z)">
+          ↪ Redo
+        </button>
+        <button className="btn-small" onClick={onAddMarker} title="Add marker at playhead (M)">
+          🚩 Marker
+        </button>
         <span className="toolbar-hint">Click a library item’s “+ Timeline” to build your edit · drag clips to move · drag edges to trim</span>
         <div className="zoom-controls">
           <button className="btn-small" title="Zoom out" onClick={() => onZoomChange(pxPerSec / 1.4)}>
@@ -260,6 +279,26 @@ export function Timeline(props: TimelineProps) {
                 <div key={t} className="tick" style={{ left: t * pxPerSec }}>
                   <span>{formatTime(t)}</span>
                 </div>
+              ))}
+              {markers.map((m) => (
+                <button
+                  key={m.id}
+                  className="ruler-marker"
+                  style={{ left: m.time * pxPerSec }}
+                  title={`Marker @ ${formatTime(m.time)} — right-click to delete`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSeek(m.time)
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onRemoveMarker(m.id)
+                  }}
+                >
+                  🚩
+                </button>
               ))}
             </div>
 

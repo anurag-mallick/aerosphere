@@ -3,7 +3,7 @@ import type { ClipColorAdjust } from '../types/editor'
 import { pickLutFile } from '../core/ffmpeg'
 import { uid } from '../utils/format'
 import { interpolateChannel } from '../utils/keyframes'
-import { DroneIcon, Insta360Icon, PhotoIcon } from './icons'
+import { DroneIcon, Insta360Icon, PhotoIcon, AudioIcon } from './icons'
 
 const SPEED_STEPS = [0.25, 0.5, 1, 2, 4]
 
@@ -44,7 +44,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function Inspector(props: InspectorProps) {
   const { clip, clipPlayhead } = props
 
-  if (!clip || clip.kind === 'audio') {
+  if (!clip) {
     return (
       <aside className="inspector">
         <p className="empty-hint">
@@ -88,6 +88,97 @@ export function Inspector(props: InspectorProps) {
 
   const ca: ClipColorAdjust = clip.colorAdjust ?? { brightness: 0, contrast: 0, saturation: 0 }
 
+  // -------------------------------------------------------- audio processing
+  const audioSection = (
+    <Row label="Audio cleanup">
+      <div className="color-sliders">
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={!!clip.audioDenoise}
+            onChange={(e) => props.onUpdateClip({ audioDenoise: e.target.checked })}
+          />
+          <span className="small">Voice isolation — reduce background noise</span>
+        </label>
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={!!clip.audioNormalize}
+            onChange={(e) => props.onUpdateClip({ audioNormalize: e.target.checked })}
+          />
+          <span className="small">Normalize loudness (−16 LUFS)</span>
+        </label>
+        {clip.kind === 'audio' && (
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={!!clip.duckUnderVideo}
+              onChange={(e) => props.onUpdateClip({ duckUnderVideo: e.target.checked })}
+            />
+            <span className="small">Auto-duck under video audio</span>
+          </label>
+        )}
+      </div>
+    </Row>
+  )
+
+  if (clip.kind === 'audio') {
+    return (
+      <aside className="inspector">
+        <header className="inspector-header">
+          <AudioIcon size={16} />
+          <span className="clip-name" title={clip.name}>{clip.name}</span>
+        </header>
+        {audioSection}
+        <p className="empty-hint">
+          Trim, split and move this clip on the timeline. Add it to an audio track to use ducking.
+        </p>
+      </aside>
+    )
+  }
+
+  // -------------------------------------------------------------- titles
+  const title = clip.title ?? { text: '', size: 42, position: 'bottom' as const }
+  const titleSection = (
+      <Row label="Title">
+        <div className="color-sliders">
+          <input
+            type="text"
+            className="title-input"
+            placeholder="Overlay text…"
+            value={title.text}
+            onChange={(e) => props.onUpdateClip({ title: { ...title, text: e.target.value } })}
+          />
+          <label className="mini-slider">
+            <span>Size</span>
+            <input
+              type="range"
+              min={18}
+              max={160}
+              value={title.size}
+              onChange={(e) => props.onUpdateClip({ title: { ...title, size: Number(e.target.value) } })}
+            />
+          </label>
+          <div className="speed-picker">
+            {(['top', 'bottom'] as const).map((p) => (
+              <button
+                key={p}
+                className={`btn-tiny ${title.position === p ? 'active' : ''}`}
+                onClick={() => props.onUpdateClip({ title: { ...title, position: p } })}
+              >
+                {p === 'top' ? 'Top' : 'Bottom'}
+              </button>
+            ))}
+            {title.text && (
+              <button className="btn-tiny btn-danger" onClick={() => props.onUpdateClip({ title: undefined })}>
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+      </Row>
+    )
+
   return (
     <aside className="inspector">
       <header className="inspector-header">
@@ -127,6 +218,7 @@ export function Inspector(props: InspectorProps) {
               ['Brightness', 'brightness'],
               ['Contrast', 'contrast'],
               ['Saturation', 'saturation'],
+              ['Gamma', 'gamma'],
               ['Temperature', 'temperature'],
               ['Tint', 'tint'],
             ] as const
@@ -151,6 +243,21 @@ export function Inspector(props: InspectorProps) {
 
       {clip.kind === 'video' && (
         <>
+          <Row label="Rotate">
+            <div className="speed-picker">
+              {([0, 90, 180, 270] as const).map((deg) => (
+                <button
+                  key={deg}
+                  className={`btn-tiny ${(clip.rotate90 ?? 0) === deg ? 'active' : ''}`}
+                  onClick={() => props.onUpdateClip({ rotate90: deg })}
+                  title={`Rotate this clip ${deg}°`}
+                >
+                  {deg}°
+                </button>
+              ))}
+            </div>
+          </Row>
+
           <Row label="Log / LUT (DJI D-Log M)">
             <div className="log-controls">
               <label className="check-label">
@@ -198,6 +305,9 @@ export function Inspector(props: InspectorProps) {
               </label>
             </Row>
           )}
+
+          {audioSection}
+          {titleSection}
 
           <Row label="Fades">
             <div className="color-sliders">

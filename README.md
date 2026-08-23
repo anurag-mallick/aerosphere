@@ -25,18 +25,27 @@ AeroSphere brings both of your camera ecosystems into one desktop editor: refram
 ### General editor
 - Multi-track timeline (video/photo tracks + any number of audio tracks)
 - Trim, **split at playhead (`S`)**, drag-to-move with snapping, zoom
+- **Undo / redo** (`⌘Z` / `⇧⌘Z`) across the whole project
+- **Timeline markers** (`M`) on the ruler — click to jump, right-click to delete
+- **Per-clip rotation** — quarter-turn 0°/90°/180°/270° for any clip or section
+- **Text titles** — burned-in overlays with size/top-bottom positioning and live preview
 - **Speed ramps** (0.25× – 4×) with pitch-corrected audio
+- Per-clip volume, fades and full mute
 - Simultaneous multi-audio playback and mixing
 - Real-time preview with master-clock A/V sync
-- Keyframe markers rendered directly on clips
-- Project persistence across sessions
+- Project persistence + schema versioning/migrations
+- Crash-safe UI: an error boundary keeps one bad panel from white-screening the editor
 
-### Export
-- Resolution presets grouped by orientation: landscape up to 4K, vertical/social (1080×1920), square, cinematic 2.39:1
-- Frame rate choice: 24 / 25 / 30 / 50 / 60 fps
-- Encoder choice: H.264 or H.265/HEVC
-- Background music mixing with per-track delay
-- Live progress with cancel support
+### Audio suite (Fairlight/Voice-Isolation inspired)
+- **Voice isolation** — FFmpeg noise reduction for windy drone audio
+- **Loudness normalization** to −16 LUFS broadcast standard
+- **Music auto-ducking** — music automatically dips under dialogue via sidechain compression
+- Any number of audio tracks playing simultaneously
+
+### Export & delivery
+- **Delivery presets** — YouTube 1080p/4K, Reels/TikTok vertical, square feed, cinematic master, H.265 archive
+- Manual control of resolution, frame rate (24–60 fps) and encoder (H.264/H.265)
+- Background music mixing, live progress with cancel support
 
 ---
 
@@ -92,9 +101,19 @@ npm run package     # full distributable (.dmg)
 | Burn telemetry | Inspector → *Telemetry SRT* (auto-detected) |
 | Export | **Export Movie** → resolution / fps / encoder → Save |
 
-Keyboard: `Space` play/pause · `S` split · `Delete` remove clip · `Esc` deselect
+Keyboard: `Space` play/pause · `S` split · `M` marker · `⌘Z`/`⇧⌘Z` undo·redo · `Delete` remove clip · `?` shortcut help · `Esc` deselect
 
 ---
+
+## 🧪 Development
+
+```bash
+npm run typecheck   # TypeScript
+npm test            # vitest unit tests (keyframe math, pipeline helpers)
+npm run build       # production bundle
+```
+
+CI (GitHub Actions) runs typecheck + tests + build on macOS and Ubuntu for every push/PR.
 
 ## 🏗 Architecture notes
 

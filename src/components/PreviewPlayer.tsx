@@ -9,6 +9,8 @@ interface PreviewPlayerProps {
   hasVideo: boolean
   photoSrc: string | null
   viewRect: ViewRect | null
+  activeTitle?: { text: string; size: number; position: 'top' | 'bottom' } | null
+  rotate90?: number
   currentTime: number
   totalDuration: number
   isPlaying: boolean
@@ -29,6 +31,9 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
     isPlaying,
     muted,
   } = props
+  const activeTitle = props.activeTitle
+  const rotate = ((props.rotate90 ?? 0) % 360 + 360) % 360
+  const rotated = rotate === 90 || rotate === 270
 
   // track the displayed media box so the reframing overlay aligns exactly
   const [mediaAspect, setMediaAspect] = useState<number | null>(null)
@@ -52,7 +57,12 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
       <div className="preview-stage">
         <div
           className={`preview-frame ${hasVideo || photoSrc ? '' : 'empty'}`}
-          style={mediaAspect ? { aspectRatio: String(mediaAspect) } : undefined}
+          style={{
+            aspectRatio: mediaAspect
+              ? String(rotated && mediaAspect > 0 ? 1 / mediaAspect : mediaAspect)
+              : undefined,
+            transform: rotate ? `rotate(${rotate}deg)` : undefined,
+          }}
         >
           <video ref={videoRef} className={`preview-video ${hasVideo ? '' : 'hidden'}`} playsInline />
           {photoSrc && (
@@ -65,6 +75,14 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
                 setMediaAspect(img.naturalWidth > 0 ? img.naturalWidth / img.naturalHeight : null)
               }}
             />
+          )}
+          {activeTitle && activeTitle.text.trim() && (
+            <div
+              className={`preview-title pos-${activeTitle.position}`}
+              style={{ fontSize: `${Math.max(14, activeTitle.size / 2.2)}px` }}
+            >
+              {activeTitle.text}
+            </div>
           )}
           {viewRect && !showPlaceholder && (
             <div

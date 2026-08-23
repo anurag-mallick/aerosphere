@@ -379,6 +379,84 @@ button {
   color: #3e9c76;
 }
 
+/* burned-in title preview */
+.preview-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: white;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  padding: 0 16px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.preview-title.pos-top {
+  top: 18px;
+}
+
+.preview-title.pos-bottom {
+  bottom: 18px;
+}
+
+.title-input {
+  background: #26263a;
+  color: #eee;
+  border: 1px solid #3a3a52;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 0.72rem;
+  width: 100%;
+}
+
+/* ruler markers */
+.ruler-marker {
+  position: absolute;
+  top: -2px;
+  margin-left: -8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.62rem;
+  line-height: 1;
+  z-index: 6;
+  transform: rotate(90deg);
+}
+
+.ruler-marker:hover {
+  transform: rotate(90deg) scale(1.25);
+}
+
+/* shortcuts modal table */
+.shortcut-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  color: #ccc;
+}
+
+.shortcut-table td {
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.shortcut-table td:first-child {
+  color: #e94560;
+  white-space: nowrap;
+}
+
+kbd {
+  background: #2b2b40;
+  border: 1px solid #44445e;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.68rem;
+}
+
 .library-item-info {
   flex: 1;
   min-width: 0;
