@@ -323,6 +323,9 @@ export interface ElectronAPI {
   generateProxy: (
     videoPath: string
   ) => Promise<{ ok: boolean; proxyPath?: string; existed?: boolean; error?: string }>
+  preparePhoto: (
+    photoPath: string
+  ) => Promise<{ ok: boolean; path?: string; converted?: boolean; error?: string }>
   savePng: (
     dataUrl: string,
     defaultName: string

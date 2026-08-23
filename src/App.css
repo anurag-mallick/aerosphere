@@ -37,8 +37,10 @@ button {
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid #262636;
-  gap: 1rem;
+  gap: 0.75rem;
+  row-gap: 0.5rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .header-title {
@@ -216,17 +218,56 @@ button {
 }
 
 .right-column {
-  flex: 1;
+  flex: 3 1 480px;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  min-width: 0;
+  min-width: 340px;
   min-height: 0;
+}
+
+/* responsive panel hiding + adaptive preview height */
+.app.hide-sidebar .sidebar {
+  display: none;
+}
+
+.app.hide-inspector .inspector {
+  display: none;
+}
+
+.preview-stage {
+  height: clamp(200px, 34vh, 420px);
+}
+
+.export-card {
+  width: min(420px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.timeline-toolbar {
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+}
+
+.library-list {
+  max-height: 30vh;
+}
+
+@media (max-width: 1240px) {
+  .toolbar-hint {
+    display: none;
+  }
+
+  .tagline {
+    display: none;
+  }
 }
 
 /* ============ sidebar / library ============ */
 .sidebar {
-  width: 300px;
+  width: clamp(240px, 22vw, 320px);
+  min-width: 230px;
   flex-shrink: 0;
   overflow-y: auto;
   display: flex;
@@ -927,7 +968,8 @@ kbd {
 
 /* ============ inspector ============ */
 .inspector {
-  width: 280px;
+  width: clamp(250px, 21vw, 300px);
+  min-width: 240px;
   flex-shrink: 0;
   background: #1d1d2c;
   border: 1px solid #262636;

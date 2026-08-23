@@ -178,6 +178,8 @@ const [exportResolution, setExportResolution] =
   const [markers, setMarkers] = useState<TimelineMarker[]>(saved.current?.markers ?? [])
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [dragDepth, setDragDepth] = useState(0)
+  const [showSidebar, setShowSidebar] = useState(true)
+  const [showInspector, setShowInspector] = useState(true)
 
   // ------------------------------------------------------- undo / redo (Cmd+Z)
   const projectSnapshot = useMemo(
@@ -659,6 +661,27 @@ const [exportResolution, setExportResolution] =
   )
 
 
+  const addPhotoEntries = useCallback(
+    async (paths: string[]) => {
+      const entries: LibraryPhoto[] = []
+      for (const p of paths) {
+        try {
+          const res = await window.electronAPI.preparePhoto(p)
+          entries.push({
+            id: uid('pho'),
+            name: fileNameOf(res.path ?? p),
+            path: res.ok && res.path ? res.path : p,
+          })
+        } catch {
+          entries.push({ id: uid('pho'), name: fileNameOf(p), path: p })
+        }
+      }
+      setPhotos((prev) => [...prev, ...entries])
+      return entries.length
+    },
+    []
+  )
+
   // --------------------------------------------------- drag & drop import
   const VIDEO_EXTS = ['mp4', 'mov', 'insv', 'webm', 'mkv', 'm4v']
   const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'heic', 'webp']
@@ -724,7 +747,7 @@ const [exportResolution, setExportResolution] =
         const phs = paths.filter((p) => PHOTO_EXTS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
         const auds = paths.filter((p) => AUDIO_EXTS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
         if (vids.length) await importVideos(vids)
-        if (phs.length) setPhotos((prev) => [...prev, ...phs.map((p2) => ({ id: uid('pho'), name: fileNameOf(p2), path: p2 }))])
+        if (phs.length) await addPhotoEntries(phs)
         if (auds.length) {
           const items: LibraryAudio[] = []
           for (const p2 of auds) {
@@ -743,10 +766,7 @@ const [exportResolution, setExportResolution] =
       setError(null)
       const paths = await pickFiles(PHOTO_FILTERS)
       if (!paths || paths.length === 0) return
-      setPhotos((prev) => [
-        ...prev,
-        ...paths.map((p) => ({ id: uid('pho'), name: fileNameOf(p), path: p })),
-      ])
+      await addPhotoEntries(paths)
     } catch (err) {
       setError(`Import failed: ${(err as Error).message}`)
     }
@@ -1125,7 +1145,7 @@ const [exportResolution, setExportResolution] =
   // -------------------------------------------------------------------- view
   return (
     <div
-      className="app"
+      className={`app ${showSidebar ? '' : 'hide-sidebar'} ${showInspector ? '' : 'hide-inspector'}`}
       onDragEnter={(e) => {
         e.preventDefault()
         setDragDepth((d) => d + 1)
@@ -1161,6 +1181,20 @@ const [exportResolution, setExportResolution] =
           </span>
         </div>
         <div className="controls">
+          <button
+            className={`btn-small ${showSidebar ? 'active' : ''}`}
+            title="Toggle media library"
+            onClick={() => setShowSidebar((v) => !v)}
+          >
+            📚 Library
+          </button>
+          <button
+            className={`btn-small ${showInspector ? 'active' : ''}`}
+            title="Toggle inspector"
+            onClick={() => setShowInspector((v) => !v)}
+          >
+            🧰 Inspector
+          </button>
           <button
             className="btn-small"
             title="Keyboard shortcuts (?)"

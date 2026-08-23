@@ -469,6 +469,26 @@ ipcMain.handle('stitch-insv', async (_event, opts) => {
   });
 });
 
+// Photos: normalize iPhone .heic/.heif to PNG so Chromium can display them.
+ipcMain.handle('prepare-photo', async (_event, inputPath) => {
+  const ext = path.extname(inputPath).slice(1).toLowerCase();
+  if (!['heic', 'heif'].includes(ext)) return { ok: true, path: inputPath };
+  const outDir = path.join(os.tmpdir(), 'aero-photos');
+  fs.mkdirSync(outDir, { recursive: true });
+  const out = path.join(outDir, `${path.parse(inputPath).name}-${crypto.randomBytes(3).toString('hex')}.png`);
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn('sips', ['-s', 'format', 'png', inputPath, '--out', out], { stdio: 'ignore' });
+      proc.on('error', reject);
+      proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`sips exited ${code}`))));
+    });
+    if (!fs.existsSync(out)) throw new Error('conversion produced no file');
+    return { ok: true, path: out, converted: true };
+  } catch (err) {
+    return { ok: false, error: err.message, path: inputPath };
+  }
+});
+
 // DJI drones (and others) record a telemetry .srt next to the video with the
 // same basename - detect it so the renderer can offer burn-in.
 ipcMain.handle('find-subtitle', async (_event, videoPath) => {

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertInsv: (inputPath) => ipcRenderer.invoke('convert-insv', inputPath),
   findSubtitle: (videoPath) => ipcRenderer.invoke('find-subtitle', videoPath),
   generateProxy: (videoPath) => ipcRenderer.invoke('generate-proxy', videoPath),
+  preparePhoto: (photoPath) => ipcRenderer.invoke('prepare-photo', photoPath),
   savePng: (dataUrl, defaultName) => ipcRenderer.invoke('save-png', dataUrl, defaultName),
   scanFolder: (dirPath) => ipcRenderer.invoke('scan-folder', dirPath),
   openDirectoryDialog: () => ipcRenderer.invoke('open-directory-dialog'),
