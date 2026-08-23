@@ -409,6 +409,67 @@ const [exportResolution, setExportResolution] =
     )
   }, [activeOverlayClip, engine.currentTime])
 
+  const onDropMediaOnTrack = useCallback(
+    (trackId: string, payload: { mediaKind: 'video' | 'photo' | 'audio'; id: string }, timeSec: number) => {
+      const t = Math.round(timeSec * 100) / 100
+      let full: TimelineClip | null = null
+
+      if (payload.mediaKind === 'video') {
+        const v = videos.find((v) => v.id === payload.id)
+        if (!v) return
+        full = {
+          id: uid('clip'), position: t, sourceId: v.id, name: v.name, kind: 'video', path: v.path,
+          trimIn: 0, duration: v.duration || 5, sourceDuration: v.duration || 5,
+          speed: 1, is360: v.is360 ?? false, projection: v.projection,
+          pairedPath: v.pairedPath, equirect: v.equirect ?? false, keyframes: [], volume: 1,
+        }
+      } else if (payload.mediaKind === 'photo') {
+        const p = photos.find((p) => p.id === payload.id)
+        if (!p) return
+        full = { id: uid('clip'), position: t, sourceId: p.id, name: p.name, kind: 'photo', path: p.path,
+          trimIn: 0, duration: PHOTO_DEFAULT_DURATION, sourceDuration: MAX_SOURCE, keyframes: [] }
+      } else if (payload.mediaKind === 'audio') {
+        const a = audios.find((a) => a.id === payload.id)
+        if (!a) return
+        full = { id: uid('clip'), position: t, sourceId: a.id, name: a.name, kind: 'audio', path: a.path,
+          trimIn: 0, duration: a.duration || 10, sourceDuration: a.duration || 10 }
+      }
+      if (!full) return
+
+      setTracks((prev) => {
+        const ti = prev.findIndex((t) => t.id === trackId)
+        if (ti < 0) return prev
+        const tr = prev[ti]
+        const before = tr.clips.filter((c) => c.position < t - 1e-6)
+        const after = tr.clips
+          .filter((c) => c.position >= t - 1e-6)
+          .map((c) => ({ ...c, position: c.position + full!.duration }))
+        const nextTracks = [...prev]
+        nextTracks[ti] = { ...tr, clips: [...before, { ...full!, position: t }, ...after] }
+        return nextTracks
+      })
+      setSelectedClipId(null)
+    },
+    [videos, photos, audios]
+  )
+
+  const onMoveClipToTrack = useCallback(
+    (fromTrackId: string, toTrackId: string, clipId: string) => {
+      setTracks((prev) => {
+        const fromIdx = prev.findIndex((t) => t.id === fromTrackId)
+        const toIdx = prev.findIndex((t) => t.id === toTrackId)
+        if (fromIdx < 0 || toIdx < 0) return prev
+        const clip = prev[fromIdx].clips.find((c) => c.id === clipId)
+        if (!clip) return prev
+        const nextTracks = [...prev]
+        nextTracks[fromIdx] = { ...prev[fromIdx], clips: prev[fromIdx].clips.filter((c) => c.id !== clipId) }
+        nextTracks[toIdx] = { ...prev[toIdx], clips: [...prev[toIdx].clips, clip] }
+        return nextTracks
+      })
+    },
+    []
+  )
+
   // --------------------------------------------------------- timeline adds
   const appendClipToTrack = useCallback(
     (type: TrackType, clip: Omit<TimelineClip, 'id' | 'position'>) => {
@@ -1357,6 +1418,8 @@ const [exportResolution, setExportResolution] =
             onRedo={redo}
             canUndo={canUndo}
             canRedo={canRedo}
+            onDropMediaOnTrack={onDropMediaOnTrack}
+            onMoveClipToTrack={onMoveClipToTrack}
           />
         </div>
 

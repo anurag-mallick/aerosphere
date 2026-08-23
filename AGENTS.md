@@ -22,5 +22,8 @@ Never leave a stale build behind: if code changed, rebuild before finishing.
   reading source or calling backend handlers directly.
 
 ## 3 · Git hygiene
-- Demo/user media never enters git (`Demo video/`, `*.insv`, `*.lrv` are ignored).
+- **Always push to GitHub after verified changes** — never leave work unpushed.
+- Demo/user media NEVER enters git (`Demo video/`, `*.insv`, `*.lrv`, `*.LRV` are gitignored).
 - One logical change per commit; push to `origin main` after verification.
+- Never run `git add -A` / `git commit` from outside the project directory — the
+  home folder is not a repo and doing so risks committing personal files.

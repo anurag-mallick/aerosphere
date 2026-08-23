@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TimelineClip, TimelineMarker, TimelineTrack, TrackType } from '../types/editor'
 import { clamp } from '../utils/format'
 import { formatTime } from '../utils/format'
@@ -46,6 +46,12 @@ interface TimelineProps {
   onRedo: () => void
   canUndo: boolean
   canRedo: boolean
+  onDropMediaOnTrack: (
+    trackId: string,
+    payload: { mediaKind: 'video' | 'photo' | 'audio'; id: string },
+    timeSec: number
+  ) => void
+  onMoveClipToTrack: (fromTrackId: string, toTrackId: string, clipId: string) => void
 }
 
 /** source-aware icon: 360 cameras and drones get their own mark */
@@ -81,10 +87,15 @@ export function Timeline(props: TimelineProps) {
     markers,
     onAddMarker,
     onRemoveMarker,
+    onDropMediaOnTrack,
+    onMoveClipToTrack,
   } = props
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
+  const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null)
+  const tracksRef = useRef<TimelineTrack[]>(tracks)
+  tracksRef.current = tracks
 
   const contentSeconds = Math.max(totalDuration + 20, 60)
   const contentWidth = contentSeconds * pxPerSec
@@ -169,6 +180,24 @@ export function Timeline(props: TimelineProps) {
       const onMove = (ev: PointerEvent) => {
         const state = dragRef.current
         if (!state) return
+
+        // allow vertical retarget between compatible tracks
+        const elUnder = document.elementFromPoint(ev.clientX, ev.clientY)
+        const laneEl = elUnder?.closest?.('.track-lane') as HTMLElement | null
+        if (laneEl) {
+          const targetId = laneEl.getAttribute('data-track-id')
+          const targetType = laneEl.getAttribute('data-track-type') as TrackType | null
+          const requiredType = state.clip.kind === 'audio' ? 'audio' : 'video'
+          if (
+            targetId &&
+            targetId !== state.track.id &&
+            targetType === requiredType
+          ) {
+            onMoveClipToTrack(state.track.id, targetId, state.clip.id)
+            state.track = { ...state.track, id: targetId }
+          }
+        }
+
         const deltaSec = (ev.clientX - state.startX) / state.pps
         const o = state.clip
         const trackState = state.track
@@ -250,7 +279,8 @@ export function Timeline(props: TimelineProps) {
   )
 
   const startRulerDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    onSelectClip(null)
+    // NOTE: seeking from the ruler intentionally preserves the current
+    // clip selection so Split / keyframe actions stay armed.
     seekFromEvent(event.clientX, event.currentTarget)
     const target = event.currentTarget
     const onMove = (ev: PointerEvent) => seekFromEvent(ev.clientX, target)
@@ -362,13 +392,38 @@ export function Timeline(props: TimelineProps) {
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className={`track-lane ${track.isVisible ? '' : 'muted'} ${track.type}`}
+                data-track-id={track.id}
+                data-track-type={track.type}
+                className={`track-lane ${track.isVisible ? '' : 'muted'} ${track.type} ${dragOverTrackId === track.id ? 'drop-target' : ''}`}
                 style={{
                   height: LANE_HEIGHT,
                   backgroundImage: `repeating-linear-gradient(to right, transparent 0, transparent ${Math.max(
                     pxPerSec - 1,
                     0
                   )}px, rgba(255,255,255,0.03) ${Math.max(pxPerSec - 1, 0)}px, rgba(255,255,255,0.03) ${pxPerSec}px)`,
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'copy'
+                  if (dragOverTrackId !== track.id) setDragOverTrackId(track.id)
+                }}
+                onDragLeave={() => {
+                  setDragOverTrackId(null)
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setDragOverTrackId(null)
+                  const raw = e.dataTransfer.getData('text/aero-item')
+                  if (!raw) return
+                  try {
+                    const payload = JSON.parse(raw) as { mediaKind: 'video'|'photo'|'audio'; id: string }
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                    const timeSec = Math.max(0, (e.clientX - rect.left) / pxPerSec)
+                    onDropMediaOnTrack(track.id, payload, timeSec)
+                  } catch {
+                    // malformed drop data — ignore
+                  }
                 }}
                 onPointerDown={(e) => {
                   onSelectClip(null)
