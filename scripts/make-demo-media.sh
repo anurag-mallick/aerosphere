@@ -15,15 +15,14 @@ $FF -y -loglevel error -f lavfi -i "testsrc2=duration=6:size=1280x720:rate=24" \
 echo "— labeled equirectangular (2048x1024) —"
 # center vertical stripe marks the FRONT direction (yaw 0); dark top band = up,
 # light bottom band = down; plain background elsewhere.
+# (drawbox only — drawtext needs fontconfig/fonts which CI runners lack;
+#  the stripe/bands are the pixel-probe ground truth used by tests)
 $FF -y -loglevel error -f lavfi \
   -i "color=c=0x2a5d8f:s=2048x1024:d=8:r=24" \
   -vf "\
 drawbox=x=924:y=0:w=200:h=1024:color=white@0.55:t=fill,\
 drawbox=x=0:y=0:w=2048:h=200:color=black@0.75:t=fill,\
-drawbox=x=0:y=824:w=2048:h=200:color=white@0.85:t=fill,\
-drawtext=text='FRONT':fontsize=120:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2,\
-drawtext=text='UP':fontsize=90:fontcolor=0x88aaff:x=(w-text_w)/2:y=40,\
-drawtext=text='DOWN':fontsize=90:fontcolor=black:x=(w-text_w)/2:y=h-th-40" \
+drawbox=x=0:y=824:w=2048:h=200:color=white@0.85:t=fill" \
   -pix_fmt yuv420p -c:v libx264 "$OUT/demo-equirect.mp4"
 
 echo "— dual-fisheye square (1440x1440) via v360 e->dfisheye —"
