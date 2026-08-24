@@ -5,9 +5,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { buildCompositePlan } from '../composite-plan.js'
 import { runExport, probeFile, extractMetadata } from '../export-pipeline.js'
+import { resolveBinary } from '../src-shared/ffmpeg-utils.js'
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aero-integration-'))
-const FFMPEG = '/opt/homebrew/bin/ffmpeg'
+const FFMPEG = resolveBinary('ffmpeg')
 let passCount = 0, failCount = 0
 function check(cond, msg) {
   if (cond) { passCount++; console.log('  ✓', msg) }

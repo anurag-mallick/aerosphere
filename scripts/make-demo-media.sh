@@ -3,7 +3,7 @@
 # Outputs into public/demo/ (raw assets served by vite dev server).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FF=${FFMPEG:-/opt/homebrew/bin/ffmpeg}
+FF=${FFMPEG:-$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)}
 OUT=public/demo
 mkdir -p "$OUT"
 

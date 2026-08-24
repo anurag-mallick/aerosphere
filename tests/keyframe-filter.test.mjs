@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildReframePlan, reframeFilterAt, sampleChannel } from '../keyframe-filter.js'
+import { resolveBinary } from '../src-shared/ffmpeg-utils.js'
 
 const kfs = [
   { time: 0, pan: 0, tilt: 0, roll: 0, fov: 90, easing: 'ease' },
@@ -92,7 +93,7 @@ describe('static filters render through real ffmpeg', () => {
     const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aero-')), 'seg.mp4')
     const mid = plan.spans[Math.floor(plan.spans.length / 2)].filter
     execFileSync(
-      '/opt/homebrew/bin/ffmpeg',
+      resolveBinary('ffmpeg'),
       ['-y', '-loglevel', 'error', '-f', 'lavfi',
        '-i', 'testsrc2=duration=0.4:size=512x256:rate=12',
        '-vf', mid, '-frames:v', '4', out],
