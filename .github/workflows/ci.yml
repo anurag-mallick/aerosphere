@@ -37,5 +37,8 @@ jobs:
       # (composite export, demo round-trip). Kept in the default job since the
       # whole suite runs in well under a minute locally; 30-min job timeout
       # leaves ample headroom for slower macOS runners.
+      # demo-roundtrip needs the generated fixtures — public/demo is gitignored
+      - name: Generate demo fixtures
+        run: bash scripts/make-demo-media.sh
       - run: npm test
       - run: npm run build
