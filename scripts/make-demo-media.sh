@@ -26,16 +26,14 @@ drawtext=text='UP':fontsize=90:fontcolor=0x88aaff:x=(w-text_w)/2:y=40,\
 drawtext=text='DOWN':fontsize=90:fontcolor=black:x=(w-text_w)/2:y=h-th-40" \
   -pix_fmt yuv420p -c:v libx264 "$OUT/demo-equirect.mp4"
 
-echo "— synthetic dual-fisheye square (1440x1440) —"
-# right circle (front lens) = red core w/ white centre dot, left circle = blue,
-# outside circles = black. Matches Preview360Viewport lensUV centres/radius.
-$FF -y -loglevel error -f lavfi \
-  -i "color=c=black:s=1440x1440:d=8:r=24,format=gbrp" \
-  -vf "\
-geq=r='between(hypot(X-W*0.75,H/2),0,W*0.25)*255':\
-g='between(hypot(X-W*0.75,H/2),20,W*0.25-20)*180+between(hypot(X-W*0.75,H/2),0,30)*255':\
-b='between(hypot(X-W*0.25,H/2),0,W*0.25)*255',format=yuv420p" \
-  -c:v libx264 "$OUT/demo-dfisheye.mp4"
+echo "— dual-fisheye square (1440x1440) via v360 e->dfisheye —"
+# Project the labeled equirect through ffmpeg's own dfisheye output so the
+# fixture uses the exact same projection convention as the export pipeline
+# (v360=dfisheye:e). Lens circles land at x=0.25W/0.75W, r=0.25W,
+# right circle = front (yaw 0), left = back. 220° diagonal fov like X3.
+$FF -y -loglevel error -i "$OUT/demo-equirect.mp4" \
+  -vf "v360=e:dfisheye:d_fov=220:w=1440:h=1440" \
+  -pix_fmt yuv420p -c:v libx264 "$OUT/demo-dfisheye.mp4"
 
 echo "— subtitles + music —"
 cat > "$OUT/demo.srt" <<'SRT'

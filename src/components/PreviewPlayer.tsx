@@ -86,8 +86,22 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
         >
           <video
             ref={videoRef}
-            className={`preview-video ${hasVideo && !props.is360 ? '' : 'hidden'}`}
+            className={`preview-video ${hasVideo ? '' : 'hidden'}`}
+            style={
+              props.is360
+                // keep the element in-flow so it still sizes preview-frame —
+                // display:none here collapses the frame to 0×0 and the WebGL
+                // viewport (absolutely positioned inside it) vanishes with it
+                ? { visibility: 'hidden' }
+                : undefined
+            }
             playsInline
+            // required so WebGL VideoTexture uploads are not origin-tainted
+            // (media:// responses send Access-Control-Allow-Origin: *)
+            crossOrigin="anonymous"
+            // load metadata + first frames immediately so paused scrubbing
+            // works and the 360 viewport can texture before first play
+            preload="auto"
           />
           {photoSrc && (
             <img
@@ -121,7 +135,9 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
               <span>view</span>
             </div>
           )}
-          {props.is360 && (videoRef.current?.videoWidth ?? 0) > 0 && (
+          {/* mediaAspect flips on loadedmetadata — a render-time videoWidth
+              read stays 0 forever when paused (no re-render after src swap) */}
+          {props.is360 && mediaAspect !== null && (
             <Preview360Viewport
               videoEl={videoRef.current ?? null}
               pan={props.view360?.pan ?? 0}

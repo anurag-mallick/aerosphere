@@ -222,6 +222,9 @@ export function usePlaybackEngine(videoTracks: TimelineTrack[], audioTracks: Tim
 
   // correct drift after seeks (guarded so natural playback isn't thrashed)
   useEffect(() => {
+    // while playing the clock is DERIVED from the element each frame —
+    // correcting here would reset the element and stall the clock
+    if (isPlayingRef.current) return
     const v = videoRef.current
     if (v && activeVideoClip) {
       const target = activeVideoClip.trimIn + (currentTime - activeVideoClip.position)

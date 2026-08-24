@@ -60,7 +60,6 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
   } = props
 
   // ---- interaction state -------------------------------------------------
-  const [dragging, setDragging] = useState(false)
   const dragLastRef = useRef<{ x: number; y: number; shift: boolean } | null>(null)
 
   // ---- refs: declared with explicit |null so .current stays assignable ----
@@ -72,13 +71,22 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
   const viewRef = useRef({ pan, tilt, roll, fov })
   viewRef.current = { pan, tilt, roll, fov }
 
+  // drag state as a ref so event handlers stay referentially stable
+  // (state would rebuild the whole three.js scene on every drag start/stop)
+  const draggingRef = useRef(false)
+  const [, forceRender] = useState(0)
+
+  // latest callbacks via refs — App re-creates these every tick, and a stale
+  // capture inside the debounce timer wrote keyframes at the WRONG playhead
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
+
   const minimapDataRef = useRef({
     keyframes: keyframes ?? [],
     clipTime,
     clipDuration,
     camPan: pan,
     camTilt: tilt,
-    onViewChange,
     onSeekClipTime,
   })
   minimapDataRef.current = {
@@ -87,31 +95,32 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     clipDuration,
     camPan: pan,
     camTilt: tilt,
-    onViewChange,
     onSeekClipTime,
   }
 
   // ---- debounced onViewChange --------------------------------------------
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const emitViewChange = useCallback(
-    (p: number, t: number, f: number) => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(() => onViewChange?.(p, t, f), 80)
-    },
-    [onViewChange]
-  )
+  const emitViewChange = useCallback((p: number, t: number, f: number) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => onViewChangeRef.current?.(p, t, f), 80)
+  }, [])
 
   // ---- pointer / wheel interactions ---------------------------------------
   const onPointerDown = useCallback((e: PointerEvent) => {
-    setDragging(true)
+    draggingRef.current = true
+    forceRender((n) => n + 1)
     dragLastRef.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey }
-    ;(e.target as Element).setPointerCapture(e.pointerId)
+    try {
+      ;(e.target as Element).setPointerCapture(e.pointerId)
+    } catch {
+      // synthetic events / detached pointers have no capture target
+    }
   }, [])
 
   const onPointerMove = useCallback(
     (e: PointerEvent) => {
       const last = dragLastRef.current
-      if (!dragging || !last) return
+      if (!draggingRef.current || !last) return
       const dx = e.clientX - last.x
       const dy = e.clientY - last.y
       dragLastRef.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey }
@@ -129,12 +138,13 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
         emitViewChange(np, nt, v.fov)
       }
     },
-    [dragging, emitViewChange]
+    [emitViewChange]
   )
 
   const onPointerUp = useCallback(() => {
-    setDragging(false)
+    draggingRef.current = false
     dragLastRef.current = null
+    forceRender((n) => n + 1)
   }, [])
 
   const onWheel = useCallback(
@@ -232,18 +242,21 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
             vec3 north = cross(axis, east);
             vec3 perp = d - axis * dot(d, axis);
             float psi = atan(dot(perp, north), dot(perp, east));
-            return centre + rn * circleR * vec2(cos(psi), -sin(psi));
+            // x negated: the mirrored sphere geometry flips world X, which
+            // would otherwise display lens text mirrored
+            return centre + rn * circleR * vec2(-cos(psi), -sin(psi));
           }
 
           void main() {
             vec3 d = normalize(vDir);
 
             // X3-style square frame: two circles side by side.
-            // right circle = lens facing +Z, left circle = lens facing −Z
-            vec3 axisA = vec3(0.0, 0.0, 1.0);
-            vec3 axisB = vec3(0.0, 0.0, -1.0);
+            // ffmpeg v360 dfisheye ground truth: right circle (u≈0.75) = FRONT
+            // (yaw 0, which our camera faces via -Z), left circle = BACK
+            vec3 axisF = vec3(0.0, 0.0, -1.0);
+            vec3 axisB = vec3(0.0, 0.0, 1.0);
 
-            vec2 uv = lensUV(d, axisA, vec2(0.75, 0.5), 0.25);
+            vec2 uv = lensUV(d, axisF, vec2(0.75, 0.5), 0.25);
             float wA = uv.x >= 0.0 ? 1.0 : 0.0;
             vec2 uvB = lensUV(d, axisB, vec2(0.25, 0.5), 0.25);
             float wB = uvB.x >= 0.0 ? 1.0 : 0.0;
@@ -256,11 +269,17 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
             // soft blend across the overlap zone between the two lenses
             float blend = 0.5;
             gl_FragColor = mix(colB, colA, blend * wA + (1.0 - blend) * wB / max(wA + wB, 0.0001));
+            // raw ShaderMaterial skips three's output encoding — the sRGB
+            // texture was hardware-decoded to linear, so re-encode here or
+            // everything renders dark
+            #include <colorspace_fragment>
           }
         `,
       })
     } else {
-      material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide })
+      // geometry.scale(-1,1,1) already flips winding so inner faces are
+      // front-facing — adding BackSide here culls everything (black screen)
+      material = new THREE.MeshBasicMaterial({ map: texture })
     }
     const sphere = new THREE.Mesh(geometry, material)
     scene.add(sphere)
@@ -268,8 +287,9 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     const camera = new THREE.PerspectiveCamera(90, 16 / 9, 0.1, 1100)
 
     const resize = () => {
-      const w = canvas.clientWidth || 640
-      const h = canvas.clientHeight || 360
+      const w = canvas.clientWidth
+      const h = canvas.clientHeight
+      if (w < 2 || h < 2) return // layout not ready — retry on a later frame
       renderer.setSize(w, h, false)
       camera.aspect = w / h
       camera.updateProjectionMatrix()
@@ -360,10 +380,25 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     }
 
     // ---------- single render loop ----------
+    let lastW = 0
+    let lastH = 0
     const loop = () => {
       if (disposed) return
+      // self-heal sizing: preview-frame can grow after mount (video metadata,
+      // font load, sidebar animation) — window 'resize' alone misses those
+      if (canvas.clientWidth !== lastW || canvas.clientHeight !== lastH) {
+        lastW = canvas.clientWidth
+        lastH = canvas.clientHeight
+        resize()
+      }
       const v = viewRef.current
+      // Chromium's requestVideoFrameCallback chain breaks when the element's
+      // src changes (clip switch) — three's internal update loop then never
+      // fires again. Drive uploads from here instead.
+      if (videoEl.readyState >= 2) texture.needsUpdate = true
       camera.rotation.order = 'YXZ'
+      // pan=0 faces -Z, which lands on the equirect image centre column —
+      // matching ffmpeg v360 yaw=0 (FRONT). No offset needed.
       camera.rotation.set(
         (v.tilt * Math.PI) / 180,
         (v.pan * Math.PI) / 180,
@@ -405,19 +440,11 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     }
   }, [videoEl, projection, lensFov, onPointerDown, onPointerMove, onPointerUp, onWheel])
 
-  // keyboard focus outline suppression while dragging
-  useEffect(() => {
-    if (!dragging) return
-    const stop = (e: Event) => e.preventDefault()
-    document.body.addEventListener('selectstart', stop)
-    return () => document.body.removeEventListener('selectstart', stop)
-  }, [dragging])
-
   return (
     <>
       <canvas
         ref={canvasRef}
-        className={`preview-360-viewport ${dragging ? 'grabbing' : ''}`}
+        className="preview-360-viewport"
       />
       <canvas
         ref={minimapRef}

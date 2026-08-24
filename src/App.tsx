@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import './App.css'
 import type {
   ExportProgress,
+  ExportTimelineOptions,
   LibraryAudio,
   LibraryPhoto,
   LibraryVideo,
@@ -24,6 +25,8 @@ import {
 import { usePlaybackEngine } from './hooks/usePlaybackEngine'
 import { MediaLibrary } from './components/MediaLibrary'
 import { PreviewPlayer } from './components/PreviewPlayer'
+import { ToastStack, toasts, pushToast } from './components/Toasts'
+import { sounds, isSoundEnabled, setSoundEnabled, subscribeSoundEnabled } from './utils/sounds'
 import { Timeline } from './components/Timeline'
 import { Inspector } from './components/Inspector'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -165,10 +168,26 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+
+  // Central message bridge: every setError/setNotice call site across the app
+  // surfaces as an animated toast with an appropriate sound. State is cleared
+  // immediately after forwarding so identical consecutive messages re-trigger.
+  const lastMsgRef = useRef('')
+  useEffect(() => {
+    const msg = error ?? notice
+    if (!msg) return
+    if (lastMsgRef.current === msg) return
+    lastMsgRef.current = msg
+    if (error) toasts.error(error)
+    else if (notice) toasts.success(notice)
+    setError(null)
+    setNotice(null)
+  }, [error, notice])
   const [ffmpegVersion, setFfmpegVersion] = useState<string | null>(null)
   const [convertingVideoId, setConvertingVideoId] = useState<string | null>(null)
   const [proxyBusyVideoId, setProxyBusyVideoId] = useState<string | null>(null)
   const [stitchingVideoId, setStitchingVideoId] = useState<string | null>(null)
+  const soundOn = useSyncExternalStore(subscribeSoundEnabled, isSoundEnabled, isSoundEnabled)
 
 const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
@@ -1223,10 +1242,7 @@ const [exportResolution, setExportResolution] =
   }, [selectedClipId, deleteClip, splitSelectedClip, engine, undo, redo, addMarker, duplicateSelected, jumpMarker])
 
   // ------------------------------------------------------------------- export
-  const runExport = useCallback(async () => {
-    if (exportState) return
-    setError(null)
-
+  const collectExportOptions = useCallback((): Omit<ExportTimelineOptions, 'outputPath'> | null => {
     const visualClips = videoTracksList
       .filter((t) => t.isVisible)
       .flatMap((t) => t.clips)
@@ -1239,35 +1255,17 @@ const [exportResolution, setExportResolution] =
 
     if (visualClips.length === 0) {
       setError('Add at least one video or photo clip to the timeline before exporting.')
-      return
+      return null
     }
 
-    const fmtMeta = OUTPUT_FORMATS.find((f) => f.id === exportFormat)
-    const outputPath = await pickSavePath(
-      `aerosphere-${new Date().toISOString().slice(0, 10)}.${fmtMeta?.ext ?? 'mp4'}`,
-      fmtMeta?.ext ?? 'mp4'
-    )
-    if (!outputPath) return
-
     const preset = RESOLUTION_PRESETS[exportResolution]
-    engine.pause()
-    setSelectedClipId(null)
-    setExportState({ percent: 0, stage: 'Preparing export…' })
-
-    let unsubscribe: (() => void) | null = null
-    try {
-      unsubscribe = window.electronAPI.onExportProgress((progress) => {
-        setExportState({ percent: progress.percent, stage: progress.stage })
-      })
-
-      const result = await window.electronAPI.exportTimeline({
-        outputPath,
-        width: preset.width,
-        height: preset.height,
-        fps: exportFps,
-        format: exportFormat,
-        videoTracks: videoTracksList.filter(t => t.isVisible).map(t => ({
-          clips: t.clips.map((c) => ({
+    return {
+      width: preset.width,
+      height: preset.height,
+      fps: exportFps,
+      format: exportFormat,
+      videoTracks: videoTracksList.filter(t => t.isVisible).map(t => ({
+        clips: t.clips.map((c) => ({
           kind: c.kind === 'photo' ? ('photo' as const) : ('video' as const),
           path: c.path,
           position: c.position,
@@ -1298,27 +1296,49 @@ const [exportResolution, setExportResolution] =
           logNormalize: c.logNormalize,
           lutPath: c.lutPath,
           subtitlesPath: c.burnSubtitles && c.srtPath ? c.srtPath : null,
-          })),
         })),
-        musicClips: musicClips.map((c) => ({
-          path: c.path,
-          position: c.position,
-          trimIn: c.trimIn,
-          duration: c.duration,
-          duck: c.duckUnderVideo,
-          denoise: c.audioDenoise,
-          normalize: c.audioNormalize,
-          eqBass: c.eqBass || 0,
-          eqTreble: c.eqTreble || 0,
-          dehum: c.dehum || 'off',
-          durationTl: c.duration,
-        })),
+      })),
+      musicClips: musicClips.map((c) => ({
+        path: c.path,
+        position: c.position,
+        trimIn: c.trimIn,
+        duration: c.duration,
+        duck: c.duckUnderVideo,
+        denoise: c.audioDenoise,
+        normalize: c.audioNormalize,
+        eqBass: c.eqBass || 0,
+        eqTreble: c.eqTreble || 0,
+        dehum: c.dehum || 'off',
+        durationTl: c.duration,
+      })),
+    }
+  }, [videoTracksList, audioTracksList, exportResolution, exportFps, exportFormat])
+
+  const executeExport = useCallback(async (
+    outputPath: string,
+    options: Omit<ExportTimelineOptions, 'outputPath'>
+  ) => {
+    engine.pause()
+    setSelectedClipId(null)
+    setExportState({ percent: 0, stage: 'Preparing export…' })
+
+    let unsubscribe: (() => void) | null = null
+    try {
+      unsubscribe = window.electronAPI.onExportProgress((progress) => {
+        setExportState({ percent: progress.percent, stage: progress.stage })
+      })
+
+      const result = await window.electronAPI.exportTimeline({
+        ...options,
+        outputPath,
       })
 
       if (result.cancelled) {
-        setNotice('Export cancelled.')
+        toasts.info('Export cancelled.')
       } else if (result.ok) {
-        setNotice(`Movie exported: ${outputPath}`)
+        // special rising arpeggio instead of the generic success chime
+        pushToast('success', `Movie exported: ${outputPath}`, { silent: true })
+        if (isSoundEnabled()) sounds.exportDone()
       } else {
         setError(`Export failed: ${result.error}`)
       }
@@ -1328,7 +1348,74 @@ const [exportResolution, setExportResolution] =
       if (unsubscribe) unsubscribe()
       setExportState(null)
     }
-  }, [exportState, videoTracksList, audioTracksList, exportResolution, exportFps, exportFormat, engine])
+  }, [exportResolution, engine])
+
+  const runExport = useCallback(async () => {
+    if (exportState) return
+    setError(null)
+
+    const fmtMeta = OUTPUT_FORMATS.find((f) => f.id === exportFormat)
+    const outputPath = await pickSavePath(
+      `aerosphere-${new Date().toISOString().slice(0, 10)}.${fmtMeta?.ext ?? 'mp4'}`,
+      fmtMeta?.ext ?? 'mp4'
+    )
+    if (!outputPath) return
+
+    const options = collectExportOptions()
+    if (!options) return
+    await executeExport(outputPath, options)
+  }, [exportState, exportFormat, collectExportOptions, executeExport])
+
+  // DEV-only automation hooks for e2e tests. Bridges ONLY what CDP cannot do
+  // (native open/save dialogs); every other flow is driven via real DOM events.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as { __aero: unknown }).__aero = {
+      importFolder,
+      selectClip: (id: string | null) => setSelectedClipId(id),
+      seek: (t: number) => engine.seek(t),
+      play: () => void engine.play(),
+      pause: () => engine.pause(),
+      updateSelectedClip,
+      collectExportOptions,
+      exportTo: async (path: string) => {
+        const options = collectExportOptions()
+        if (!options) return { ok: false, error: 'nothing to export' }
+        await executeExport(path, options)
+        return { ok: true }
+      },
+      getState: () => ({
+        videos: videos.map((v) => ({
+          id: v.id, name: v.name, path: v.path, duration: v.duration,
+          is360: !!v.is360, projection: v.projection ?? null, equirect: !!v.equirect,
+        })),
+        photos: photos.length,
+        audios: audios.length,
+        tracks: tracks.map((t) => ({
+          id: t.id, type: t.type,
+          clips: t.clips.map((c) => ({
+            id: c.id, name: c.name, kind: c.kind, position: c.position,
+            duration: c.duration, keyframes: (c.keyframes ?? []).length,
+          })),
+        })),
+        selectedClipId,
+        currentTime: engine.currentTime,
+        isPlaying: engine.isPlaying,
+        totalDuration: engine.totalDuration,
+        activeClip: engine.activeVideoClip
+          ? {
+              id: engine.activeVideoClip.id,
+              name: engine.activeVideoClip.name,
+              is360: !!engine.activeVideoClip.is360,
+              projection: engine.activeVideoClip.projection ?? null,
+            }
+          : null,
+        error,
+        notice,
+        exportState,
+      }),
+    }
+  }, [importFolder, updateSelectedClip, collectExportOptions, executeExport, engine, videos, photos, audios, tracks, selectedClipId, error, notice, exportState])
 
   const openExportDialog = useCallback(() => {
     setError(null)
@@ -1395,23 +1482,20 @@ const [exportResolution, setExportResolution] =
           >
             ⌨ Shortcuts
           </button>
+          <button
+            className="btn-small"
+            title={soundOn ? 'Mute interface sounds' : 'Unmute interface sounds'}
+            onClick={() => setSoundEnabled(!soundOn)}
+          >
+            {soundOn ? '🔔 Sounds' : '🔕 Muted'}
+          </button>
           <button className="btn-primary" onClick={openExportDialog}>
             Export Movie
           </button>
         </div>
       </header>
 
-      {(error || notice) && (
-        <div className={`banner ${error ? 'banner-error' : 'banner-ok'}`}>
-          <span>{error ?? notice}</span>
-          <button
-            className="btn-tiny"
-            onClick={() => (error ? setError(null) : setNotice(null))}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <ToastStack />
 
       <ErrorBoundary>
       <main className="main-content">

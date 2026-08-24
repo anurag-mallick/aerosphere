@@ -55,7 +55,16 @@ const MIME_TYPES = {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'media',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+    // corsEnabled is REQUIRED for <video crossOrigin="anonymous"> to load —
+    // without it Chromium taints the element and WebGL VideoTexture uploads
+    // throw SecurityError (black 360° viewport)
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+    },
   },
 ]);
 
@@ -63,6 +72,22 @@ function registerMediaProtocol() {
   protocol.handle('media', async (request) => {
     try {
       const url = new URL(request.url);
+
+      // CORS preflight: Range headers are NOT CORS-safelisted, so seek
+      // requests from <video crossOrigin="anonymous"> arrive as OPTIONS.
+      // Without an answer the browser blocks the media request entirely.
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range, Content-Type',
+            'Access-Control-Max-Age': '86400',
+          },
+        });
+      }
+
       let filePath = decodeURIComponent(url.pathname);
       if (filePath.startsWith('/')) filePath = filePath.slice(1);
       if (process.platform === 'win32') {
@@ -119,6 +144,8 @@ function registerMediaProtocol() {
         'Content-Length': String(end - start + 1),
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range, Content-Type',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
       };
       if (status === 206) {
         headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
@@ -136,6 +163,10 @@ function registerMediaProtocol() {
 
 let mainWindow = null;
 const isDev = !app.isPackaged;
+
+// Video editor: playback must start from synthetic clicks (transport bar) and
+// scripted automation without a fresh user gesture each time.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 function createWindow() {
   mainWindow = new BrowserWindow({

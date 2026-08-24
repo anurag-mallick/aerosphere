@@ -3,6 +3,7 @@ import type { ClipColorAdjust } from '../types/editor'
 import { pickLutFile } from '../core/ffmpeg'
 import { uid } from '../utils/format'
 import { interpolateChannel } from '../utils/keyframes'
+import { sounds } from '../utils/sounds'
 import { DroneIcon, Insta360Icon, PhotoIcon, AudioIcon } from './icons'
 
 const SPEED_STEPS = [0.25, 0.5, 1, 2, 4]
@@ -96,6 +97,7 @@ export function Inspector(props: InspectorProps) {
       easing: 'ease',
     }
     props.onUpdateClip({ keyframes: [...kfs.filter((k) => Math.abs(k.time - t) > 0.05), nf] })
+    sounds.tick()
   }
 
   const updateKf = (id: string, patch: Partial<ClipKeyframe>) => {
@@ -106,6 +108,7 @@ export function Inspector(props: InspectorProps) {
 
   const removeKf = (id: string) => {
     props.onUpdateClip({ keyframes: kfs.filter((k) => k.id !== id) })
+    sounds.tick()
   }
 
   const ca: ClipColorAdjust = clip.colorAdjust ?? { brightness: 0, contrast: 0, saturation: 0 }

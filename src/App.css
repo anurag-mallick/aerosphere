@@ -208,6 +208,110 @@ button {
   color: #9fe0b5;
 }
 
+/* ============ toast notifications ============ */
+.toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: 380px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #e8eaf0;
+  background: rgba(24, 26, 36, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: toast-in 0.22s cubic-bezier(0.21, 1.02, 0.73, 1) both;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  margin-top: 1px;
+}
+
+.toast-success .toast-icon {
+  background: #1f6b3d;
+  color: #b8f0cc;
+}
+.toast-success {
+  border-color: rgba(63, 185, 110, 0.45);
+}
+
+.toast-error .toast-icon {
+  background: #7a2a38;
+  color: #ffc4cd;
+}
+.toast-error {
+  border-color: rgba(229, 83, 110, 0.5);
+}
+
+.toast-info .toast-icon {
+  background: #24518f;
+  color: #bcd9ff;
+}
+.toast-info {
+  border-color: rgba(80, 140, 220, 0.45);
+}
+
+.toast-warn .toast-icon {
+  background: #7a5a1f;
+  color: #ffe2a8;
+}
+.toast-warn {
+  border-color: rgba(220, 165, 70, 0.5);
+}
+
+.toast-text {
+  flex: 1;
+  word-break: break-word;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.toast-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* ============ workspace ============ */
 .main-content {
   flex: 1;
@@ -1241,8 +1345,9 @@ kbd {
   z-index: 3;
 }
 
-.preview-360-viewport.grabbing {
+.preview-360-viewport:active {
   cursor: grabbing;
+  user-select: none;
 }
 
 .preview-360-minimap {
