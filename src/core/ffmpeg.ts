@@ -1,8 +1,23 @@
 // Renderer-side wrappers around the Electron IPC bridge.
 import type { VideoMetadata, ConvertInsvResult } from '../types/editor'
 
-export function mediaUrl(filePath: string): string {
-  return `media://local/${encodeURIComponent(filePath)}`
+export type PreviewQuality = 'proxy' | 'full'
+
+/** global preview-quality preference; 'proxy' serves .aeroproxy.mp4 when present */
+let previewQuality: PreviewQuality = 'proxy'
+
+export function setPreviewQuality(q: PreviewQuality) {
+  previewQuality = q
+}
+
+export function getPreviewQuality(): PreviewQuality {
+  return previewQuality
+}
+
+export function mediaUrl(filePath: string, quality?: PreviewQuality): string {
+  const q = quality ?? previewQuality
+  const base = `media://local/${encodeURIComponent(filePath)}`
+  return q === 'full' ? `${base}?q=full` : base
 }
 
 const api = () => window.electronAPI

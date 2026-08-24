@@ -38,6 +38,10 @@ interface PreviewPlayerProps {
   onViewChange?: (pan: number, tilt: number, fov: number) => void
   /** mini-map dot click → seek within clip */
   onSeekClipTime?: (t: number) => void
+  /** preview quality preference — proxy (480p) or full source */
+  previewQuality?: 'proxy' | 'full'
+  /** flip proxy/full preview */
+  onTogglePreviewQuality?: () => void
 }
 
 export function PreviewPlayer(props: PreviewPlayerProps) {
@@ -190,6 +194,19 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
           value={Math.min(currentTime, totalDuration)}
           onChange={(e) => props.onSeek(Number(e.target.value))}
         />
+        {hasVideo && (
+          <button
+            className={`btn-icon quality-toggle ${props.previewQuality === 'full' ? 'active' : ''}`}
+            onClick={props.onTogglePreviewQuality}
+            title={
+              props.previewQuality === 'full'
+                ? 'Previewing FULL quality — click for smooth 480p proxy'
+                : 'Previewing 480p proxy — click for FULL-quality preview (needs a faster machine)'
+            }
+          >
+            {props.previewQuality === 'full' ? '🎞' : '⚡'}
+          </button>
+        )}
       </div>
     </div>
   )

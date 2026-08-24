@@ -192,7 +192,7 @@ function App() {
 const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
-  const [exportFormat, setExportFormat] = useState<OutputFormat>('mp4')
+  const [exportFormat, setExportFormat] = useState<OutputFormat>('mp4-hevc')
   const [deliveryPreset, setDeliveryPreset] = useState('YouTube — 1080p')
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportState, setExportState] = useState<ExportProgress | null>(null)
@@ -253,7 +253,26 @@ const [exportResolution, setExportResolution] =
   // ---------------------------------------------------------------- playback
   const videoTracksList = tracks.filter((t) => t.type === 'video')
   const audioTracksList = tracks.filter((t) => t.type === 'audio')
-  const engine = usePlaybackEngine(videoTracksList, audioTracksList)
+  const [previewQuality, setPreviewQualityState] = useState<'proxy' | 'full'>(() => {
+    try {
+      return localStorage.getItem('aero.previewQuality') === 'full' ? 'full' : 'proxy'
+    } catch {
+      return 'proxy'
+    }
+  })
+  const togglePreviewQuality = useCallback(() => {
+    setPreviewQualityState((q) => {
+      const next = q === 'proxy' ? 'full' : 'proxy'
+      try {
+        localStorage.setItem('aero.previewQuality', next)
+      } catch {
+        // private mode — session only
+      }
+      return next
+    })
+  }, [])
+
+  const engine = usePlaybackEngine(videoTracksList, audioTracksList, previewQuality)
 
   // ------------------------------------------------------------- clip editing
   const updateClip = useCallback((trackId: string, clipId: string, patch: Partial<TimelineClip>) => {
@@ -1388,6 +1407,9 @@ const [exportResolution, setExportResolution] =
         videos: videos.map((v) => ({
           id: v.id, name: v.name, path: v.path, duration: v.duration,
           is360: !!v.is360, projection: v.projection ?? null, equirect: !!v.equirect,
+          pairedPath: v.pairedPath ?? null,
+          missingPair: !!v.missingPair,
+          lrvPath: v.lrvPath ?? null,
         })),
         photos: photos.length,
         audios: audios.length,
@@ -1550,6 +1572,8 @@ const [exportResolution, setExportResolution] =
             keyframes={view360?.keyframes}
             onViewChange={handleViewportChange}
             onSeekClipTime={handleSeekClipTime}
+            previewQuality={previewQuality}
+            onTogglePreviewQuality={togglePreviewQuality}
           />
 
           <Timeline

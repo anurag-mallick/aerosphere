@@ -477,12 +477,17 @@ function checkCancelled() {
  * options: { outputPath, width, height, fps, codec, visualClips[], musicClips[], onProgress(percent, stage) }
  */
 async function runExport(options) {
-  const { outputPath, width, height, fps } = options;
+  const { width, height, fps } = options;
+  // ffmpeg children may run with a different cwd — resolve everything up front
+  const outputPath = path.resolve(options.outputPath);
   const outSpec = outputSpec(options.format);
-  const videoTracks = Array.isArray(options.videoTracks) ? options.videoTracks : [];
+  const videoTracks = (Array.isArray(options.videoTracks) ? options.videoTracks : [])
+    .map((t) => ({ ...t, clips: (t.clips || []).map((c) => ({ ...c, path: path.resolve(c.path), lutPath: c.lutPath ? path.resolve(c.lutPath) : undefined, subtitlesPath: c.subtitlesPath ? path.resolve(c.subtitlesPath) : undefined })) }));
   const visualClips = videoTracks.flatMap((t) => t.clips);
   const visibleVideoTracks = videoTracks.filter((t) => t.isVisible);
-  const musicClips = (Array.isArray(options.musicClips) ? options.musicClips : []).filter((m) => m && m.path);
+  const musicClips = (Array.isArray(options.musicClips) ? options.musicClips : [])
+    .filter((m) => m && m.path)
+    .map((m) => ({ ...m, path: path.resolve(m.path) }));
   const onProgress = options.onProgress || (() => {});
 
   if (visualClips.length === 0) {
@@ -527,7 +532,7 @@ async function runExport(options) {
     // track wins), real gaps become black filler, dissolves create blends.
     const pieces = buildCompositePlan(videoTracks);
     console.log('[DEBUG] pieces:', pieces.length, JSON.stringify(pieces.map(p=>({t:p.type,n:p.clip?.name??null,start:p.startTl??p.tlStart,len:p.len??(p.tlEnd-p.tlStart)}))))
-    const segPaths = [];
+
     const totalUnitsEstimate = Math.max(1, pieces.reduce((n, piece) => {
       if (piece.type === 'blend') return n + 1;
       if (piece.type === 'black') return n + 1;
@@ -614,29 +619,43 @@ async function runExport(options) {
       report(doneUnits * progressPerUnit, stageLabel);
     };
 
+    // ------------------------------------------------------------------ segments
+    // Segments are rendered by a bounded worker pool: every task writes a
+    // unique seg-N.mp4 (N = concat position), reads only its own inputs, and
+    // tasks are queued in exact concat order — so parallel execution is safe
+    // and the concatenated result is identical to sequential rendering.
+    const CONCURRENCY = Math.max(2, Math.min(os.cpus().length - 1, 6));
+    const jobThreads = String(Math.max(1, Math.round(os.cpus().length / CONCURRENCY)));
+    const segBase = doneUnits * progressPerUnit;
+    const segmentTasks = []; // { stage, fn: async () => segPath }
+    const nextSegPath = () => path.join(workDir, `seg-${segmentTasks.length}.mp4`);
+    const queueTask = (stage, fn) => segmentTasks.push({ stage, fn });
+    const encArgs = () => [...videoCodecArgs('h264'), '-threads', jobThreads];
+
     for (const piece of pieces) {
       checkCancelled();
 
       if (piece.type === 'black') {
-        checkCancelled();
-        const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
-        await runFfmpeg([
-          '-f', 'lavfi',
-          '-i', `color=c=black:s=${width}x${height}:r=${fps}`,
-          '-t', String(piece.len),
-          '-an',
-          ...videoCodecArgs('h264'),
-          segPath,
-        ]);
-        markDone(`Black filler (${piece.len.toFixed(1)}s)`);
-        segPaths.push(segPath);
+        const segPath = nextSegPath();
+        const stage = `Black filler (${piece.len.toFixed(1)}s)`;
+        queueTask(stage, async () => {
+          await runFfmpeg([
+            '-f', 'lavfi',
+            '-i', `color=c=black:s=${width}x${height}:r=${fps}`,
+            '-t', String(piece.len),
+            '-an',
+            ...encArgs(),
+            segPath,
+          ]);
+          return segPath;
+        });
         continue;
       }
 
       if (piece.type === 'blend') {
         const { prevClip, clip, startTl, len } = piece;
         const stage = `Dissolving into ${clip.name}`;
-        const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
+        const segPath = nextSegPath();
         const speedP = prevClip.speed || 1;
         const speedC = clip.speed || 1;
         const aSrc = prevClip.trimIn + (prevClip.duration - len) * speedP;
@@ -665,18 +684,19 @@ async function runExport(options) {
           'setsar=1',
         ].join(',');
 
-        await runFfmpeg([
-          ...inputA,
-          ...inputB,
-          '-an',
-          '-filter_complex',
-          `[0:v]${branchA}[a];[1:v]${branchB},format=yuva420p[b];[a][b]overlay=eof_action=pass,format=yuv420p[v]`,
-          '-map', '[v]',
-          ...videoCodecArgs('h264'),
-          segPath,
-        ]);
-        markDone(stage);
-        segPaths.push(segPath);
+        queueTask(stage, async () => {
+          await runFfmpeg([
+            ...inputA,
+            ...inputB,
+            '-an',
+            '-filter_complex',
+            `[0:v]${branchA}[a];[1:v]${branchB},format=yuva420p[b];[a][b]overlay=eof_action=pass,format=yuv420p[v]`,
+            '-map', '[v]',
+            ...encArgs(),
+            segPath,
+          ]);
+          return segPath;
+        });
         continue;
       }
 
@@ -687,7 +707,7 @@ async function runExport(options) {
       const safeLut = safeLutFor(clip);
       const colorFilters = colorEqArgs(clip.colorAdjust);
       const tlLen = piece.tlEnd - piece.tlStart;
-      const segPath = path.join(workDir, `seg-${segPaths.length}.mp4`);
+      const segPath = nextSegPath();
 
       if (clip.kind === 'photo') {
         const kb = !!clip.kenBurns;
@@ -712,16 +732,17 @@ async function runExport(options) {
         const inputOpts = kb
           ? ['-i', clip.path]
           : ['-loop', '1', '-framerate', String(fps), '-i', clip.path];
-        await runFfmpeg([
-          ...inputOpts,
-          '-an',
-          '-vf', vfParts,
-          '-t', String(tlLen),
-          ...videoCodecArgs('h264'),
-          segPath,
-        ]);
-        markDone(stage);
-        segPaths.push(segPath);
+        queueTask(stage, async () => {
+          await runFfmpeg([
+            ...inputOpts,
+            '-an',
+            '-vf', vfParts,
+            '-t', String(tlLen),
+            ...encArgs(),
+            segPath,
+          ]);
+          return segPath;
+        });
         continue;
       }
 
@@ -741,9 +762,8 @@ async function runExport(options) {
 
       const weightPerSpan = progressPerUnit / plan.spans.length;
       for (let si = 0; si < plan.spans.length; si++) {
-        checkCancelled();
         const span = plan.spans[si];
-        const segPath2 = path.join(workDir, `seg-${segPaths.length}.mp4`);
+        const segPath2 = nextSegPath();
         const segStartTl = piece.tlStart + ((span.ss - piece.srcTrim) / speed);
         const segDurTl = span.dur / speed;
         const vfParts = [
@@ -758,20 +778,22 @@ async function runExport(options) {
           `fps=${fps}`,
           'setsar=1',
         ];
-        await runFfmpeg([
-          '-ss', String(Math.max(0, span.ss)),
-          '-t', String(span.dur),
-          '-i', renderPathByClipId.get(piece.clip.id) ?? piece.clip.path,
-          '-an',
-          '-vf', vfParts.join(','),
-          ...videoCodecArgs('h264'),
-          segPath2,
-        ]);
-        doneUnits += 1;
-        segPaths.push(segPath2);
-        if (si % 3 === 0 || si === plan.spans.length - 1) {
-          report(doneUnits * progressPerUnit, stage);
-        }
+        const spanInput = renderPathByClipId.get(piece.clip.id) ?? piece.clip.path;
+        const spanStage = plan.spans.length > 1
+          ? `${stage} (${si + 1}/${plan.spans.length})`
+          : stage;
+        queueTask(spanStage, async () => {
+          await runFfmpeg([
+            '-ss', String(Math.max(0, span.ss)),
+            '-t', String(span.dur),
+            '-i', spanInput,
+            '-an',
+            '-vf', vfParts.join(','),
+            ...encArgs(),
+            segPath2,
+          ]);
+          return segPath2;
+        });
       }
 
       const flags = audioFlagsById.get(clip.id);
@@ -793,6 +815,30 @@ async function runExport(options) {
           dehum: clip.dehum || 'off',
         });
       }
+    }
+
+    // -------------------------------------------------- parallel segment pool
+    checkCancelled();
+    const segPaths = new Array(segmentTasks.length);
+    if (segmentTasks.length > 0) {
+      let nextTask = 0;
+      let doneTasks = 0;
+      const worker = async () => {
+        while (nextTask < segmentTasks.length) {
+          checkCancelled();
+          const i = nextTask++;
+          const { stage, fn } = segmentTasks[i];
+          segPaths[i] = await fn();
+          doneTasks += 1;
+          report(
+            segBase + (doneTasks / segmentTasks.length) * (SEGMENT_WEIGHT - segBase),
+            `${stage} · ${doneTasks}/${segmentTasks.length}`
+          );
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, segmentTasks.length) }, worker)
+      );
     }
 
     // ------------------------------------------------------------------ concat

@@ -1473,3 +1473,13 @@ kbd {
   width: 100%;
   margin-bottom: 0.5rem;
 }
+
+/* preview quality toggle (⚡ proxy / 🎞 full) */
+.quality-toggle {
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.quality-toggle.active {
+  opacity: 1;
+  color: #7ee787;
+}

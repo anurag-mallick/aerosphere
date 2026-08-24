@@ -20,7 +20,11 @@ interface ActiveAudio {
  * element is actively playing a clip - then the timeline clock is derived
  * from the element itself so A/V stays perfectly in sync.
  */
-export function usePlaybackEngine(videoTracks: TimelineTrack[], audioTracks: TimelineTrack[]) {
+export function usePlaybackEngine(
+  videoTracks: TimelineTrack[],
+  audioTracks: TimelineTrack[],
+  previewQuality: 'proxy' | 'full' = 'proxy'
+) {
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [muted, setMuted] = useState(false)
@@ -148,11 +152,11 @@ export function usePlaybackEngine(videoTracks: TimelineTrack[], audioTracks: Tim
       if (isPlayingRef.current) v.play().catch(() => {})
     }
     v.addEventListener('loadedmetadata', onMeta)
-    v.src = mediaUrl(clip.path)
+    v.src = mediaUrl(clip.path, previewQuality)
     v.load()
     return () => v.removeEventListener('loadedmetadata', onMeta)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeVideoClipId])
+  }, [activeVideoClipId, previewQuality])
 
   // pooled audio: one detached player per simultaneously active clip
   const audioKey = activeAudioList.map((a) => a.clip.id).join('|')

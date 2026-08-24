@@ -94,15 +94,18 @@ function registerMediaProtocol() {
         filePath = filePath.replace(/^\/([A-Za-z]:)/, '$1');
       }
 
+      // quality override: ?q=full skips the transparent proxy swap so the
+      // user can preview original-quality footage on capable machines
+      const forceFull = url.searchParams.get('q') === 'full';
 
-// Robust proxy editing: transparently serve a sibling
+      // Robust proxy editing: transparently serve a sibling
       // "<name>.aeroproxy.mp4" when one has been generated for the source.
       const proxyMatch = filePath.match(/^(.*)\.([^.]+)$/);
       const proxyCandidate =
         proxyMatch && !filePath.endsWith('.aeroproxy.mp4')
           ? `${proxyMatch[1]}.aeroproxy.mp4`
           : null;
-      if (proxyCandidate && fs.existsSync(proxyCandidate)) {
+      if (!forceFull && proxyCandidate && fs.existsSync(proxyCandidate)) {
         filePath = proxyCandidate;
       }
 
@@ -406,8 +409,10 @@ ipcMain.handle('generate-proxy', async (_event, inputPath) => {
     ffmpeg(inputPath)
       .outputOptions([
         '-vf', 'scale=-2:480',
+        '-c:v', 'libx265',
         '-preset', 'veryfast',
-        '-crf', '23',
+        '-crf', '26',
+        '-tag:v', 'hvc1',
         '-an',
         '-movflags', '+faststart',
       ])
