@@ -768,11 +768,13 @@ const [exportResolution, setExportResolution] =
           const is360 = det.is360
           let lrvPath: string | null = null
           let thumbSource = item.path
-          if (item.format === 'insv' && !item.pairPath) {
+          if (item.format === 'insv') {
+            // LRV lookup runs for paired AND unpaired insv files: a raw
+            // single-lens frame makes a useless circular-fisheye thumbnail,
+            // while the sibling LRV is a cheap pre-stitched equirect source
             try {
               const pair = await window.electronAPI.findInsvPair(item.path)
               lrvPath = pair.ok ? (pair.lrvPath ?? null) : null
-              // use LRV (pre-stitched equirect) for a representative thumbnail
               if (lrvPath) thumbSource = lrvPath
             } catch {
               // optional feature
