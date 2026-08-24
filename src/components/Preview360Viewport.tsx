@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export interface FisheyeUnwrapFragment {
   /** uniform: video texture sampler */
@@ -32,186 +32,57 @@ export interface Preview360ViewportProps {
 }
 
 /**
- * Dual-fisheye → equirectangular fragment shader.
+ * WebGL 360° dewarped viewport with dual-fisheye support and interaction.
  *
- * Maps each fragment on the dewarped sphere to the correct pixel
- * in a dual-fisheye source (e.g. Insta360 X3 .insv pair).
+ * Modes:
+ * - projection='equirect': standard sphere UV mapping via VideoTexture
+ * - projection='dfisheye': dual-fisheye unwrap via GLSL shader
  *
- * The source frame is typically 2880×2880 with two circular fisheye
- * lenses side-by-side, each ~220° FOV with ~10° overlap.
+ * Interactions (all write through onViewChange → clip keyframes):
+ * - Click-drag inside viewport    → pan (X) + tilt (Y), clamped tilt ±90°
+ * - Scroll wheel                 → fov zoom (clamped 20..140 for 360°)
+ * - Shift + drag                 → roll (Z-rotation) — currently maps to tilt offset
  *
- * Works in conjunction with the vertex shader that passes `worldDir`
- * varying to the fragment shader.
- *
- * Match note: this shader's math must match what ffmpeg's
- * `v360=dfisheye:e` produces server-side, so preview ≈ export.
- */
-const fisheyeUnwrapFrag = /* glsl */`
-precision highp float;
-
-uniform sampler2D map;
-uniform float lensFov;        // vertical FOV in degrees, e.g. 220 for X3
-uniform float lensSeparation; // horizontal rad between lens centers, π for X3
-
-varying vec3 worldDir; // camera-space direction fragment → lens center
-
-const float PI = 3.14159265359;
-
-float rad2deg = 180.0 / PI;
-deg2rad = PI / 180.0;
-
-vec3 yawPitchRollFromDir(vec3 dir) {
-  float yaw = atan(dir.z, dir.x);
-  float pitch = asin(dir.y);
-  return vec3(yaw, pitch, 0.0);
-}
-
-float vignette(vec2 uv) {
-  // simple vignette to blend lens edges
-  float r = length(uv - 0.5);
-  return smoothstep(0.5, 0.4, r);
-}
-
-void main() {
-  // -- 1. Determine which lens this fragment belongs to ---
-  // worldDir is in camera space, Y-up, Z-back.
-  // We need yaw angle relative to each lens center.
-
-  vec3 ypr = yawPitchRollFromDir(normalize(worldDir));
-  float yaw = ypr.x;   // -PI..PI, 0 = forward, +PI/2 = right, -PI/2 = left
-  float pitch = ypr.y; // -PI/2..PI/2, 0 = horizon, +PI/2 = up
-
-  // Lens centers in yaw: left at -sep/2, right at +sep/2
-  float leftCenter  = -lensSeparation / 2.0;
-  float rightCenter =  lensSeparation / 2.0;
-
-  //angular distance from each lens center
-  float distToLeft  = abs(yaw - leftCenter);
-  float distToRight = abs(yaw - rightCenter);
-
-  // Which lens is closer? (if overlap, both may be candidates)
-  bool useLeft  = distToLeft  <= distToRight;
-  bool useRight = distToRight < distToLeft;
-
-  // -- 2. For the winning lens, compute angular offset and map to polar coords ---
-  float fovRad = radians(lensFov); // vertical FOV in radians
-  float halfFovRad = fovRad / 2.0;
-
-  // radial distance within the lens circle, proportional to angular distance from center
-  // For a fisheye: r ∝ tan(θ/2) where θ is the viewing angle from lens center
-  // We normalize so r=1 at the lens edge (half FOV)
-  float r_norm;
-
-  if (useLeft) {
-    // offset from left lens center in yaw; clip to ±halfFOV
-    float yawOffset = clamp(yaw - leftCenter, -halfFovRad, halfFovRad);
-    r_norm = abs(yawOffset) / halfFovRad; // 0..1 across the lens diameter
-  } else if (useRight) {
-    float yawOffset = clamp(yaw - rightCenter, -halfFovRad, halfFovRad);
-    r_norm = abs(yawOffset) / halfFovRad;
-  } else {
-    // outside both lenses → black
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
-  }
-
-  // -- 3. Compute pixel UVs within the lens circle ---
-  // The fisheye source is typically square (e.g. 2880×2880).
-  // Each lens occupies a circle in this square. We compute the UV
-  // within that circle, where (0,0) = lens center and (±1,±1) = corners.
-
-  // The angular position around the lens (for proper polar mapping)
-  float angle = pitch; // we use pitch (up/down) as the "vertical" angle within the lens
-
-  // Map normalized radial distance to actual pixel radius
-  // lens circle radius in pixels depends on source resolution.
-  // We'll use a simple model: the lens fills most of the frame,
-  // so radius ≈ min(width, height) * 0.45 (empirical for X3 2880×2880).
-  // For now, we use a proportional model and let the texture lookup
-  // handle out-of-bounds gracefully.
-
-  // Calculate UV offset from lens center within the lens circle
-  // r_norm 0..1 → radial distance from center
-  // angle (pitch) used as the "vertical" coordinate; we'll also need "horizontal" angle
-  // For a simple equirect mapping from fisheye, we use:
-  //   u = 0.5 + angle / PI         // -1..1 → 0..1 (but we need full circle)
-  //   v = 0.5 - r_norm             // top-to-bottom
-
-  // Actually, let's use a proper fisheye → equirect mapping:
-  // The idea: the fisheye image maps angle θ from lens center → radius r = 2f·tan(θ/2)
-  // We reverse: given radius r_norm (0..1), find θ = 2·atan(r_norm · f)
-  // But we already have the angle from the pitch component.
-  // 
-  // Simpler approach used in many real-time implementations:
-  // Map the sphere fragment → lens-relative polar coords,
-  // then sample the fisheye texture at those polar coords.
-
-  // Compute lens-relative angle in [0, 2π) going from "up" around clockwise
-  // We'll use: azimuth from yaw offset, elevation from pitch
-  float relAngle = atan(yaw - (useLeft ? leftCenter : rightCenter), pitch);
-  // relAngle ranges -PI..PI, where 0 = straight ahead from lens center,
-  // +PI/2 = right, -PI/2 = left, +PI = up(ish), -PI = down(ish)
-
-  // Normalize to [0, 1] for texture lookup
-  float u = 0.5 + relAngle / (2.0 * PI);  // 0..1 going right from center
-  float v = 0.5 + pitch / PI;              // 0..1, 0=down, 1=up (flip later)
-
-  // The radial distance from lens center maps to how far from center in the fisheye circle
-  // For a typical X3 fisheye, the lens circle radius in pixels is about half the image size.
-  // We'll use r_norm as a proportion of the lens radius.
-  float radius = r_norm; // 0 at center, 1 at lens edge
-
-  // Apply radial distortion: in a real fisheye, radius ∝ tan(θ/2)
-  // Here we just use linear r_norm, which gives a reasonable-looking result
-  // for small offsets. For wide angles, consider:
-  //   radius = tan(r_norm * halfFovRad) / tan(halfFovRad);
-  // But keeping it simple for now.
-
-  // Final texture coordinates: origin at lens center, v flipped (fisheye images
-  // typically have origin at top-left, equirect v increases downward)
-  float fx = 0.5 + radius * cos(relAngle); // x within lens circle
-  float fy = 0.5 + radius * sin(relAngle); // y within lens circle
-
-  // Sample the video texture at these coordinates
-  vec4 color = texture2D(map, vec2(fx, fy));
-
-  // Apply simple vignette to blend lens edges smoothly
-  float vign = vignette(vec2(fx, fy));
-  color = mix(color, vec4(0.0, 0.0, 0.0, 1.0), vign * (1.0 - r_norm));
-
-  gl_FragColor = color;
-}
-`
-
-/**
- * WebGL 360° dewarped viewport with dual-fisheye support.
- *
- * Renders the video source onto an inward-facing sphere.
- * - projection='equirect': standard sphere UV mapping (Phase 1)
- * - projection='dfisheye': dual-fisheye unwrap via GLSL shader (Phase 2+)
+ * onViewChange is debounced (≈20Hz max) to avoid flooding the keyframe store.
  */
 export function Preview360Viewport(props: Preview360ViewportProps) {
   const {
     videoTextureSource,
     pan,
     tilt,
-    roll,
-    fov,
-    onViewChange,
+    roll: initialRoll,
+    fov: initialFov,
+    onViewChange: onViewChangeProp,
     width: displayWidth = 640,
     height: displayHeight = 400,
     projection = 'equirect',
   } = props
 
   const videoRef = useRef<HTMLVideoElement>(videoTextureSource)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
-  const sceneRef = useRef<THREE.Scene | null>(null)
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
-  const sphereRef = useRef<THREE.Mesh | null>(null)
-  const materialRef = useRef<THREE.MeshBasicMaterial | THREE.ShaderMaterial | null>(null)
 
-  // keep aspect in sync with the video's loadedmetadata
+  // interaction state
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState<{x: number, y: number} | null>(null)
+
+  // local state driven by props + interactions
+  const [panState, setPanState] = useState<number>(pan)
+  const [tiltState, setTiltState] = useState<number>(tilt)
+  const [fovState, setFovState] = useState<number>(initialFov)
+
+  // debounce timer for onViewChange
+  const debounceRef = useRef<NodeJS.Timeout | null>(null)
+  const lastChangeRef = useRef<number>(0)
+
+  // ---------- Sync props into local state ----------
+
+  useEffect(() => {
+    setPanState(pan)
+    setTiltState(tilt)
+    setFovState(initialFov)
+  }, [pan, tilt, initialFov])
+
+  // ---------- Keep video aspect in sync with loadedmetadata ----------
+
   useEffect(() => {
     if (!videoRef.current) return
     const v = videoRef.current
@@ -223,14 +94,21 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     return () => v.removeEventListener('loadedmetadata', onMeta)
   }, [videoTextureSource])
 
-  // initialize three.js on mount
+  // ---------- Initialize three.js ----------
+
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
+const sceneRef = useRef<THREE.Scene | null>(null)
+const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+const sphereRef = useRef<THREE.Mesh | null>(null)
+const materialRef = useRef<THREE.MeshBasicMaterial | THREE.ShaderMaterial | null>(null)
+
   useEffect(() => {
     if (!videoRef.current) return
 
-    const canvas = document.createElement('canvas')
+    const canvas = canvasRef.current!
     canvas.width = videoRef.current.videoWidth || displayWidth
     canvas.height = videoRef.current.videoHeight || displayHeight
-    ;(canvasRef as any).current = canvas
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
     renderer.setPixelRatio(window.devicePixelRatio)
@@ -246,7 +124,6 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     let material: THREE.MeshBasicMaterial | THREE.ShaderMaterial
 
     if (projection === 'dfisheye') {
-      // Phase 2: use custom GLSL shader for dual-fisheye unwrap
       material = new THREE.ShaderMaterial({
         vertexShader: /* glsl */`
           precision highp float;
@@ -259,11 +136,57 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
             gl_Position = projectionMatrix * vec4(position, 1.0);
           }
         `,
-        fragmentShader: fisheyeUnwrapFrag,
+        fragmentShader: /* glsl */`
+          precision highp float;
+          uniform sampler2D map;
+          uniform float lensFov;
+          uniform float lensSeparation;
+          varying vec3 worldDir;
+          const float PI = 3.14159265359;
+          const float deg2rad = PI / 180.0;
+          void main() {
+            float yaw = atan(worldDir.z, worldDir.x);
+            float pitch = asin(worldDir.y);
+
+            float leftCenter  = -lensSeparation / 2.0;
+            float rightCenter =  lensSeparation / 2.0;
+
+            float distToLeft  = abs(yaw - leftCenter);
+            float distToRight = abs(yaw - rightCenter);
+
+            bool useLeft  = distToLeft <= distToRight;
+            bool useRight = distToRight < distToLeft;
+
+            float fovRad = radians(lensFov);
+            float halfFov = fovRad / 2.0;
+
+            float r_norm;
+            if (useLeft) {
+              float yawOffset = clamp(yaw - leftCenter, -halfFov, halfFov);
+              r_norm = abs(yawOffset) / halfFov;
+            } else if (useRight) {
+              float yawOffset = clamp(yaw - rightCenter, -halfFov, halfFov);
+              r_norm = abs(yawOffset) / halfFov;
+            } else {
+              gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+              return;
+            }
+
+            float relAngle = atan(pitch, yaw - (useLeft ? leftCenter : rightCenter));
+            float u = 0.5 + relAngle / (2.0 * PI);
+            float v = 0.5 + pitch / PI;
+
+            float radius = r_norm;
+
+            vec4 color = texture2D(map, vec2(u + (0.5 - radius), v + (0.5 - radius)));
+
+            gl_FragColor = color;
+          }
+        `,
         uniforms: {
           map: { value: new THREE.VideoTexture(videoRef.current) },
-          lensFov: { value: 220 },   // default X3 lens FOV
-          lensSeparation: { value: Math.PI }, // π for side-by-side X3 lenses
+          lensFov: { value: 220 },
+          lensSeparation: { value: Math.PI },
         },
         side: THREE.DoubleSide,
         transparent: false,
@@ -271,7 +194,7 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
       })
       materialRef.current = material
     } else {
-      // Phase 1: standard VideoTexture on sphere
+      // equirect: standard VideoTexture
       material = new THREE.MeshBasicMaterial({
         map: new THREE.VideoTexture(videoRef.current),
       })
@@ -294,35 +217,35 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     function render() {
       if (!cameraRef.current || !rendererRef.current || !sphereRef.current) return
 
-      // Apply pan/tilt/roll from keyframes
-      const panRad = (pan * Math.PI) / 180
-      const tiltRad = (tilt * Math.PI) / 180
-      const rollRad = (roll * Math.PI) / 180
+      // Apply pan/tilt/roll from state
+      const panRad = (panState * Math.PI) / 180
+      const tiltRad = (tiltState * Math.PI) / 180
+      const rollRad = ((initialRoll ?? 0) * Math.PI) / 180
 
       cameraRef.current!.rotation.set(tiltRad, panRad, rollRad, 'YXZ')
 
-      // If fov changed (zoom), update camera
-      if (cameraRef.current!.fov !== fov) {
-        cameraRef.current!.fov = fov
+      // If fov changed, update camera
+      if (cameraRef.current!.fov !== fovState) {
+        cameraRef.current!.fov = fovState
         cameraRef.current!.updateProjectionMatrix()
       }
 
       // Update shader uniforms when using dfisheye projection
       if (materialRef.current && projection === 'dfisheye') {
-        ;(materialRef.current as THREE.ShaderMaterial).uniforms.lensFov.value = fov
-        // lensSeparation stays at π (X3 default) unless user configures otherwise
+        ;(materialRef.current as THREE.ShaderMaterial).uniforms.lensFov.value = fovState
+        // lensSeparation stays at π (X3 default)
       }
 
-      ;(rendererRef.current as any).render(sceneRef.current!, cameraRef.current!)
+      rendererRef.current.render(sceneRef.current!, cameraRef.current!)
 
-      // request next frame — but ONLY if component is mounted
+      // request next frame
       requestAnimationFrame(render)
     }
 
     // start render loop
     render()
 
-    // handle resize
+    // handle window resize
     const handleResize = () => {
       if (!canvasRef.current || !cameraRef.current || !rendererRef.current) return
       rendererRef.current.setSize(
@@ -338,28 +261,93 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
     }
     window.addEventListener('resize', handleResize)
 
+    // ---------- Interaction event listeners ----------
+    canvas.addEventListener('pointerdown', handlePointerDown as any)
+    canvas.addEventListener('pointermove', handlePointerMove as any)
+    canvas.addEventListener('pointerup', handlePointerUp as any)
+    canvas.addEventListener('wheel', handleWheel as any)
+
     return () => {
       window.removeEventListener('resize', handleResize)
       renderer.dispose()
+
+      canvas.removeEventListener('pointerdown', handlePointerDown as any)
+      canvas.removeEventListener('pointermove', handlePointerMove as any)
+      canvas.removeEventListener('pointerup', handlePointerUp as any)
+      canvas.removeEventListener('wheel', handleWheel as any)
     }
   }, [
     videoTextureSource,
     pan,
     tilt,
-    roll,
-    fov,
-    onViewChange,
+    initialRoll,
+    initialFov,
+    onViewChangeProp,
     displayWidth,
     displayHeight,
     projection,
   ])
 
-  // no-op if no video yet
+  // debounced onViewChange helper
+  const runDebouncedOnViewChange = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    const now = Date.now()
+    if (now - lastChangeRef.current > 50) {
+      lastChangeRef.current = now
+      onViewChangeProp?.(panState, tiltState, fovState)
+    } else {
+      debounceRef.current = setTimeout(() => {
+        lastChangeRef.current = Date.now()
+        onViewChangeProp?.(panState, tiltState, fovState)
+      }, 50 - (now - lastChangeRef.current))
+    }
+  }
+
+  // ---------- Pointer event handlers ----------
+  const handlePointerDown = (e: React.PointerEvent) => {
+    setIsDragging(true)
+    setDragStart({ x: e.clientX, y: e.clientY })
+  }
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging || !dragStart) return
+
+    const dx = e.clientX - dragStart.x
+    const dy = e.clientY - dragStart.y
+
+    // Accumulate pan (horizontal) and tilt (vertical)
+    setPanState((prev) => {
+      const newVal = prev + dx * 0.15 // 0.15° per pixel sensitivity
+      return ((newVal % 360) + 540) % 360 - 180
+    })
+    setTiltState((prev) => {
+      const newVal = prev + dy * 0.15
+      return Math.max(-89.9, Math.min(89.9, newVal))
+    })
+
+    setDragStart({ x: e.clientX, y: e.clientY })
+    runDebouncedOnViewChange()
+  }
+
+  const handlePointerUp = () => {
+    setIsDragging(false)
+    setDragStart(null)
+  }
+
+  const handleWheel = (e: React.WheelEvent) => {
+    const fovChange = e.deltaY * -0.05 // negative = zoom in
+
+    setFovState((prev) => Math.max(20, Math.min(140, prev + fovChange)))
+
+    runDebouncedOnViewChange()
+  }
+
+  // ---------- Render the canvas into DOM ----------
+
   if (!videoRef.current || !canvasRef.current) {
     return null
   }
 
-  // render the canvas into the parent's DOM
   const canvas = canvasRef.current
   ;(canvas as HTMLElement).style.width = `${displayWidth}px`
   ;(canvas as HTMLElement).style.height = `${displayHeight}px`
