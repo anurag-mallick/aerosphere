@@ -20,11 +20,6 @@ function clampNum(v, lo, hi) {
 }
 
 function buildCompositePlan(videoTracks) {
-  console.log('[DEBUG composite] received', videoTracks.length, 'tracks');
-  for (const t of videoTracks) {
-    console.log('[DEBUG composite]   track:', t.clips?.length ?? 'NO CLIPS', 'clips',
-      JSON.stringify((t.clips??[]).map(c=>({p:c.position,d:c.duration,n:c.name}))));
-  }
   const maxEnd = Math.max(
     MIN_PIECE,
     ...videoTracks.flatMap((t) => t.clips.map((c) => c.position + c.duration))
