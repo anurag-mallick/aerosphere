@@ -27,7 +27,11 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             brew install ffmpeg
           fi
+      # CI never launches Electron — skip the ~100MB binary postinstall,
+      # whose GitHub-release download is a known npm ci failure point
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
       - run: npm run typecheck
       # full vitest suite — includes the real-ffmpeg integration tests
       # (composite export, demo round-trip). Kept in the default job since the
