@@ -7,3 +7,6 @@ Demo video/
 *.insv
 *.lrv
 *.LRV
+
+# generated demo media (recreate via scripts/make-demo-media.sh)
+public/demo/

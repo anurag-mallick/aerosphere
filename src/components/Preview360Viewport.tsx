@@ -184,7 +184,8 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
 
     let renderer: THREE.WebGLRenderer
     try {
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+      // preserveDrawingBuffer lets automated tests sample rendered pixels
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true })
     } catch {
       return // WebGL unavailable → leave flat <video> visible
     }
@@ -257,7 +258,6 @@ export function Preview360Viewport(props: Preview360ViewportProps) {
             gl_FragColor = mix(colB, colA, blend * wA + (1.0 - blend) * wB / max(wA + wB, 0.0001));
           }
         `,
-        side: THREE.BackSide,
       })
     } else {
       material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide })
