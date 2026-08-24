@@ -3,6 +3,7 @@ import type { RefObject } from 'react'
 import type { ViewRect } from '../utils/keyframes'
 import { formatTime } from '../utils/format'
 import { DroneIcon, Insta360Icon } from './icons'
+import { Preview360Viewport } from './Preview360Viewport'
 
 interface PreviewPlayerProps {
   videoRef: RefObject<HTMLVideoElement>
@@ -19,6 +20,14 @@ interface PreviewPlayerProps {
   onToggleMute: () => void
   onSeek: (t: number) => void
   onCaptureFrame: () => void
+  /** whether the source is a 360° clip (equirect or dfisheye) */
+  is360?: boolean
+  /** how the raw frames are laid out — drives v360 input selection */
+  projection?: 'dfisheye' | 'equirect'
+  /** lens FOV in degrees for dfisheye unwrapping (default 220 for X3) */
+  lensFov?: number
+  /** called when user drags/scrolls the 360 viewport — writes to clip keyframes */
+  onViewChange?: (pan: number, tilt: number, fov: number) => void
 }
 
 export function PreviewPlayer(props: PreviewPlayerProps) {
@@ -97,6 +106,18 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
             >
               <span>view</span>
             </div>
+          )}
+          {props.is360 && props.projection && (
+            <Preview360Viewport
+              videoTextureSource={videoRef.current as HTMLVideoElement}
+              pan={0}
+              tilt={0}
+              roll={0}
+              fov={props.lensFov ?? 90}
+              onViewChange={props.onViewChange}
+              width={640}
+              height={400}
+            />
           )}
         </div>
         {showPlaceholder && (
