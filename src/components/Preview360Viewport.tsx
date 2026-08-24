@@ -352,5 +352,10 @@ const materialRef = useRef<THREE.MeshBasicMaterial | THREE.ShaderMaterial | null
   ;(canvas as HTMLElement).style.width = `${displayWidth}px`
   ;(canvas as HTMLElement).style.height = `${displayHeight}px`
 
-  return <canvas ref={canvasRef} className="preview-360-viewport" />
+  return (
+    <>
+      <canvas ref={canvasRef} className="preview-360-viewport" />
+      <canvas className="preview-360-minimap" />
+    </>
+  )
 }
