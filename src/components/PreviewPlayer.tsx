@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import type { ViewRect } from '../utils/keyframes'
+import type { ClipKeyframe } from '../types/editor'
 import { formatTime } from '../utils/format'
 import { DroneIcon, Insta360Icon } from './icons'
 import { Preview360Viewport } from './Preview360Viewport'
@@ -20,14 +21,23 @@ interface PreviewPlayerProps {
   onToggleMute: () => void
   onSeek: (t: number) => void
   onCaptureFrame: () => void
-  /** whether the source is a 360° clip (equirect or dfisheye) */
+  /** whether the active clip is a 360° source — swaps flat preview for the WebGL viewport */
   is360?: boolean
-  /** how the raw frames are laid out — drives v360 input selection */
+  /** frame layout of the 360° source */
   projection?: 'dfisheye' | 'equirect'
-  /** lens FOV in degrees for dfisheye unwrapping (default 220 for X3) */
+  /** lens FOV of the dual-fisheye source (default 220 for X3) */
   lensFov?: number
-  /** called when user drags/scrolls the 360 viewport — writes to clip keyframes */
+  /** interpolated camera state at the current playhead (360 clips only) */
+  view360?: { pan: number; tilt: number; roll: number; fov: number }
+  /** clip-relative playhead time + duration, for the mini-map */
+  clipTime?: number
+  clipDuration?: number
+  /** keyframes of the active clip — mini-map path */
+  keyframes?: ClipKeyframe[]
+  /** viewport drag/zoom → upsert keyframe at playhead */
   onViewChange?: (pan: number, tilt: number, fov: number) => void
+  /** mini-map dot click → seek within clip */
+  onSeekClipTime?: (t: number) => void
 }
 
 export function PreviewPlayer(props: PreviewPlayerProps) {
@@ -74,7 +84,11 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
             transform: rotate ? `rotate(${rotate}deg)` : undefined,
           }}
         >
-          <video ref={videoRef} className={`preview-video ${hasVideo ? '' : 'hidden'}`} playsInline />
+          <video
+            ref={videoRef}
+            className={`preview-video ${hasVideo && !props.is360 ? '' : 'hidden'}`}
+            playsInline
+          />
           {photoSrc && (
             <img
               className="preview-photo"
@@ -94,7 +108,7 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
               {activeTitle.text}
             </div>
           )}
-          {viewRect && !showPlaceholder && (
+          {viewRect && !showPlaceholder && !props.is360 && (
             <div
               className="view-rect"
               style={{
@@ -107,16 +121,20 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
               <span>view</span>
             </div>
           )}
-          {props.is360 && props.projection && (
+          {props.is360 && (videoRef.current?.videoWidth ?? 0) > 0 && (
             <Preview360Viewport
-              videoTextureSource={videoRef.current as HTMLVideoElement}
-              pan={0}
-              tilt={0}
-              roll={0}
-              fov={props.lensFov ?? 90}
+              videoEl={videoRef.current ?? null}
+              pan={props.view360?.pan ?? 0}
+              tilt={props.view360?.tilt ?? 0}
+              roll={props.view360?.roll ?? 0}
+              fov={props.view360?.fov ?? 90}
+              projection={props.projection}
+              lensFov={props.lensFov}
+              clipTime={props.clipTime}
+              clipDuration={props.clipDuration}
+              keyframes={props.keyframes}
               onViewChange={props.onViewChange}
-              width={640}
-              height={400}
+              onSeekClipTime={props.onSeekClipTime}
             />
           )}
         </div>

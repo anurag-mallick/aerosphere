@@ -399,16 +399,76 @@ const [exportResolution, setExportResolution] =
   const viewRect: ViewRect | null = useMemo(() => {
     const clip = activeOverlayClip
     if (!clip || !clip.keyframes || clip.keyframes.length === 0) return null
+    if (clip.is360) return null // 360 clips use the WebGL viewport instead of the rect overlay
     const t = clamp(engine.currentTime - clip.position, 0, clip.duration)
-    const is360 = !!clip.is360
     return computeViewRect(
-      is360,
+      false,
       interpolateChannel(clip.keyframes, t, 'pan', 0),
       interpolateChannel(clip.keyframes, t, 'tilt', 0),
       interpolateChannel(clip.keyframes, t, 'roll', 0),
-      interpolateChannel(clip.keyframes, t, 'fov', is360 ? 90 : 1)
+      interpolateChannel(clip.keyframes, t, 'fov', 1)
     )
   }, [activeOverlayClip, engine.currentTime])
+
+  // interpolated virtual-camera state for the active 360° clip (drives WebGL viewport)
+  const view360 = useMemo(() => {
+    const clip = engine.activeVideoClip
+    if (!clip || !clip.is360) return null
+    const t = clamp(engine.currentTime - clip.position, 0, clip.duration)
+    const kfs = clip.keyframes ?? []
+    return {
+      pan: interpolateChannel(kfs, t, 'pan', 0),
+      tilt: interpolateChannel(kfs, t, 'tilt', 0),
+      roll: interpolateChannel(kfs, t, 'roll', 0),
+      fov: interpolateChannel(kfs, t, 'fov', 90),
+      clipTime: t,
+      clipDuration: clip.duration,
+      keyframes: kfs,
+    }
+  }, [engine.activeVideoClip, engine.currentTime])
+
+  // viewport drag/zoom → upsert a keyframe at the playhead (same rules as Inspector)
+  const handleViewportChange = useCallback(
+    (pan: number, tilt: number, fov: number) => {
+      const clip = engine.activeVideoClip
+      if (!clip || !clip.is360) return
+      let trackId: string | null = null
+      for (const tr of tracks) {
+        if (tr.clips.some((c) => c.id === clip.id)) {
+          trackId = tr.id
+          break
+        }
+      }
+      if (!trackId) return
+      const t =
+        Math.round(clamp(engine.currentTime - clip.position, 0, clip.duration) * 100) / 100
+      const kfs = clip.keyframes ?? []
+      const nf = {
+        id: uid('kf'),
+        time: t,
+        pan: Math.round(pan),
+        tilt: Math.round(tilt),
+        roll: Math.round(interpolateChannel(kfs, t, 'roll', 0)),
+        fov: Math.round(fov * 10) / 10,
+        easing: 'ease' as const,
+      }
+      updateClip(trackId, clip.id, {
+        keyframes: [...kfs.filter((k) => Math.abs(k.time - t) > 0.05), nf],
+      })
+    },
+    [engine.activeVideoClip, engine.currentTime, tracks, updateClip]
+  )
+
+  // mini-map dot click → seek to that keyframe's time within the clip
+  const handleSeekClipTime = useCallback(
+    (t: number) => {
+      const clip = engine.activeVideoClip
+      if (!clip) return
+      engine.seek(clip.position + t)
+      if (engine.isPlaying) engine.play()
+    },
+    [engine]
+  )
 
   const onDropMediaOnTrack = useCallback(
     (trackId: string, payload: { mediaKind: 'video' | 'photo' | 'audio'; id: string }, timeSec: number) => {
@@ -1397,6 +1457,15 @@ const [exportResolution, setExportResolution] =
             onToggleMute={() => engine.setMuted(!engine.muted)}
             onSeek={engine.seek}
             onCaptureFrame={captureFrame}
+            is360={engine.activeVideoClip?.is360 ?? false}
+            projection={engine.activeVideoClip?.projection}
+            lensFov={engine.activeVideoClip?.lensFov}
+            view360={view360 ? { pan: view360.pan, tilt: view360.tilt, roll: view360.roll, fov: view360.fov } : undefined}
+            clipTime={view360?.clipTime}
+            clipDuration={view360?.clipDuration}
+            keyframes={view360?.keyframes}
+            onViewChange={handleViewportChange}
+            onSeekClipTime={handleSeekClipTime}
           />
 
           <Timeline

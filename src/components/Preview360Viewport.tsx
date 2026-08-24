@@ -1,361 +1,432 @@
 import * as THREE from 'three'
-import { useEffect, useRef, useState } from 'react'
-
-export interface FisheyeUnwrapFragment {
-  /** uniform: video texture sampler */
-  map: THREE.Texture
-  /** uniform: vertical FOV of each lens in degrees (default 220 for X3) */
-  lensFov: number
-  /** uniform: horizontal separation between lens centers in radians (π ≈ 3.1416 for X3 side-by-side) */
-  lensSeparation: number
-}
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ClipKeyframe } from '../types/editor'
 
 export interface Preview360ViewportProps {
-  /** the hidden <video> element playing source media */
-  videoTextureSource: HTMLVideoElement
-  /** current pan in degrees (drives camera rotation) */
+  /** the visible <video> element playing source media (hidden while viewport active) */
+  videoEl: HTMLVideoElement | null
+  /** interpolated camera state for the current playhead */
   pan: number
-  /** current tilt in degrees (drives camera rotation) */
   tilt: number
-  /** current roll in degrees (drives camera Z-rotation) */
   roll: number
-  /** vertical FOV in degrees for 360° (20..140); zoom factor for flat (1..4) */
   fov: number
-  /** called when user drags/scrolls — writes back to clip keyframes */
-  onViewChange?: (pan: number, tilt: number, fov: number) => void
-  /** width of the video display area in CSS pixels */
-  width?: number
-  /** height of the video display area in CSS pixels */
-  height?: number
-  /** projection mode: 'equirect' or 'dfisheye' */
+  /** frame layout of this 360° source */
   projection?: 'dfisheye' | 'equirect'
+  /** lens FOV of the dual-fisheye source (default 220 for X3) */
+  lensFov?: number
+  /** clip-relative time — drives mini-map playhead marker */
+  clipTime?: number
+  /** clip duration — normalises mini-map path progress */
+  clipDuration?: number
+  /** keyframes for this clip — drawn as path on the mini-map */
+  keyframes?: ClipKeyframe[]
+  /** user dragged/scroll- zoomed the viewport → upsert keyframe at playhead */
+  onViewChange?: (pan: number, tilt: number, fov: number) => void
+  /** user clicked a keyframe dot on the mini-map → seek clip to that time */
+  onSeekClipTime?: (t: number) => void
 }
 
+const MINIMAP_W = 200
+const MINIMAP_H = 100
+
 /**
- * WebGL 360° dewarped viewport with dual-fisheye support and interaction.
+ * WebGL 360° dewarped viewport.
  *
- * Modes:
- * - projection='equirect': standard sphere UV mapping via VideoTexture
- * - projection='dfisheye': dual-fisheye unwrap via GLSL shader
+ * - projection='equirect': sphere + VideoTexture (stitched sources)
+ * - projection='dfisheye': equidistant dual-fisheye unwrap via GLSL,
+ *   geometrically matching ffmpeg `v360=dfisheye:e` (two lens circles
+ *   side-by-side in a square frame, equidistant r ∝ θ mapping)
  *
- * Interactions (all write through onViewChange → clip keyframes):
- * - Click-drag inside viewport    → pan (X) + tilt (Y), clamped tilt ±90°
- * - Scroll wheel                 → fov zoom (clamped 20..140 for 360°)
- * - Shift + drag                 → roll (Z-rotation) — currently maps to tilt offset
+ * Interactions write through onViewChange → keyframe upsert at playhead:
+ *   drag → pan/tilt · wheel → fov · shift+drag → roll (via onViewChange roll delta)
  *
- * onViewChange is debounced (≈20Hz max) to avoid flooding the keyframe store.
+ * Mini-map overlay: equirect grid, keyframe path + dots (click to jump),
+ * live camera-position marker.
  */
 export function Preview360Viewport(props: Preview360ViewportProps) {
   const {
-    videoTextureSource,
+    videoEl,
     pan,
     tilt,
-    roll: initialRoll,
-    fov: initialFov,
-    onViewChange: onViewChangeProp,
-    width: displayWidth = 640,
-    height: displayHeight = 400,
+    roll,
+    fov,
     projection = 'equirect',
+    lensFov = 220,
+    clipTime = 0,
+    clipDuration = 0,
+    keyframes,
+    onViewChange,
+    onSeekClipTime,
   } = props
 
-  const videoRef = useRef<HTMLVideoElement>(videoTextureSource)
+  // ---- interaction state -------------------------------------------------
+  const [dragging, setDragging] = useState(false)
+  const dragLastRef = useRef<{ x: number; y: number; shift: boolean } | null>(null)
 
-  // interaction state
-  const [isDragging, setIsDragging] = useState(false)
-  const [dragStart, setDragStart] = useState<{x: number, y: number} | null>(null)
+  // ---- refs: declared with explicit |null so .current stays assignable ----
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const minimapRef = useRef<HTMLCanvasElement | null>(null)
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
 
-  // local state driven by props + interactions
-  const [panState, setPanState] = useState<number>(pan)
-  const [tiltState, setTiltState] = useState<number>(tilt)
-  const [fovState, setFovState] = useState<number>(initialFov)
+  // latest view values, read by the rAF loop without re-initialising the scene
+  const viewRef = useRef({ pan, tilt, roll, fov })
+  viewRef.current = { pan, tilt, roll, fov }
 
-  // debounce timer for onViewChange
-  const debounceRef = useRef<NodeJS.Timeout | null>(null)
-  const lastChangeRef = useRef<number>(0)
+  const minimapDataRef = useRef({
+    keyframes: keyframes ?? [],
+    clipTime,
+    clipDuration,
+    camPan: pan,
+    camTilt: tilt,
+    onViewChange,
+    onSeekClipTime,
+  })
+  minimapDataRef.current = {
+    keyframes: keyframes ?? [],
+    clipTime,
+    clipDuration,
+    camPan: pan,
+    camTilt: tilt,
+    onViewChange,
+    onSeekClipTime,
+  }
 
-  // ---------- Sync props into local state ----------
+  // ---- debounced onViewChange --------------------------------------------
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const emitViewChange = useCallback(
+    (p: number, t: number, f: number) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      debounceRef.current = setTimeout(() => onViewChange?.(p, t, f), 80)
+    },
+    [onViewChange]
+  )
 
+  // ---- pointer / wheel interactions ---------------------------------------
+  const onPointerDown = useCallback((e: PointerEvent) => {
+    setDragging(true)
+    dragLastRef.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey }
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+  }, [])
+
+  const onPointerMove = useCallback(
+    (e: PointerEvent) => {
+      const last = dragLastRef.current
+      if (!dragging || !last) return
+      const dx = e.clientX - last.x
+      const dy = e.clientY - last.y
+      dragLastRef.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey }
+
+      const v = viewRef.current
+      if (last.shift) {
+        // shift+drag → roll
+        const nr = v.roll + dx * 0.2
+        viewRef.current = { ...v, roll: ((nr % 360) + 540) % 360 - 180 }
+        emitViewChange(viewRef.current.pan, viewRef.current.tilt, viewRef.current.fov)
+      } else {
+        const np = (((v.pan + dx * 0.15) % 360) + 540) % 360 - 180
+        const nt = Math.max(-89.9, Math.min(89.9, v.tilt + dy * 0.15))
+        viewRef.current = { ...v, pan: np, tilt: nt }
+        emitViewChange(np, nt, v.fov)
+      }
+    },
+    [dragging, emitViewChange]
+  )
+
+  const onPointerUp = useCallback(() => {
+    setDragging(false)
+    dragLastRef.current = null
+  }, [])
+
+  const onWheel = useCallback(
+    (e: WheelEvent) => {
+      e.preventDefault()
+      const v = viewRef.current
+      const nf = Math.max(20, Math.min(140, v.fov + e.deltaY * -0.05))
+      viewRef.current = { ...v, fov: nf }
+      emitViewChange(v.pan, v.tilt, nf)
+    },
+    [emitViewChange]
+  )
+
+  // ---- mini-map click → hit-test keyframe dots ---------------------------
+  const onMinimapClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const { keyframes: kfs, onSeekClipTime: seek } = minimapDataRef.current
+      if (!kfs.length || !seek) return
+      const rect = e.currentTarget.getBoundingClientRect()
+      const sx = rect.width / MINIMAP_W
+      const sy = rect.height / MINIMAP_H
+      const cx = (e.clientX - rect.left) / sx
+      const cy = (e.clientY - rect.top) / sy
+      const m = 8 // margin used when drawing
+      const gw = MINIMAP_W - 2 * m
+      const gh = MINIMAP_H - 2 * m
+      for (const kf of kfs) {
+        const x = m + (((((kf.pan + 180) % 360) + 360) % 360) / 360) * gw
+        const y = m + ((90 - Math.max(-90, Math.min(90, kf.tilt))) / 180) * gh
+        if (Math.hypot(cx - x, cy - y) <= 9) {
+          seek(kf.time)
+          return
+        }
+      }
+    },
+    []
+  )
+
+  // ---- main effect: scene + single rAF loop (three.js + minimap) ----------
   useEffect(() => {
-    setPanState(pan)
-    setTiltState(tilt)
-    setFovState(initialFov)
-  }, [pan, tilt, initialFov])
+    const canvas = canvasRef.current
+    const minimap = minimapRef.current
+    if (!canvas || !minimap || !videoEl) return
 
-  // ---------- Keep video aspect in sync with loadedmetadata ----------
+    let disposed = false
+    let raf = 0
 
-  useEffect(() => {
-    if (!videoRef.current) return
-    const v = videoRef.current
-    const onMeta = () => {
-      ;(canvasRef.current as HTMLCanvasElement).width = v.videoWidth
-      ;(canvasRef.current as HTMLCanvasElement).height = v.videoHeight
+    let renderer: THREE.WebGLRenderer
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+    } catch {
+      return // WebGL unavailable → leave flat <video> visible
     }
-    v.addEventListener('loadedmetadata', onMeta)
-    return () => v.removeEventListener('loadedmetadata', onMeta)
-  }, [videoTextureSource])
-
-  // ---------- Initialize three.js ----------
-
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
-const sceneRef = useRef<THREE.Scene | null>(null)
-const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
-const sphereRef = useRef<THREE.Mesh | null>(null)
-const materialRef = useRef<THREE.MeshBasicMaterial | THREE.ShaderMaterial | null>(null)
-
-  useEffect(() => {
-    if (!videoRef.current) return
-
-    const canvas = canvasRef.current!
-    canvas.width = videoRef.current.videoWidth || displayWidth
-    canvas.height = videoRef.current.videoHeight || displayHeight
-
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
-    renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     rendererRef.current = renderer
 
     const scene = new THREE.Scene()
-    sceneRef.current = scene
-
-    // inward-facing sphere so camera inside sees the video textured faces
-    const geometry = new THREE.SphereGeometry(500, 64, 48)
+    const geometry = new THREE.SphereGeometry(500, 96, 64)
     geometry.scale(-1, 1, 1)
 
-    let material: THREE.MeshBasicMaterial | THREE.ShaderMaterial
+    const texture = new THREE.VideoTexture(videoEl)
+    texture.colorSpace = THREE.SRGBColorSpace
 
+    let material: THREE.MeshBasicMaterial | THREE.ShaderMaterial
     if (projection === 'dfisheye') {
       material = new THREE.ShaderMaterial({
-        vertexShader: /* glsl */`
-          precision highp float;
-          attribute vec3 position;
-          varying vec3 worldDir;
-          uniform mat4 modelViewMatrix;
-          uniform mat4 projectionMatrix;
+        uniforms: {
+          map: { value: texture },
+          lensFovRad: { value: (lensFov * Math.PI) / 180 },
+        },
+        vertexShader: /* glsl */ `
+          varying vec3 vDir;
           void main() {
-            worldDir = (modelViewMatrix * vec4(position, 1.0)).xyz;
-            gl_Position = projectionMatrix * vec4(position, 1.0);
+            // world-space direction of this sphere fragment (sphere centred on origin)
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           }
         `,
-        fragmentShader: /* glsl */`
+        fragmentShader: /* glsl */ `
           precision highp float;
           uniform sampler2D map;
-          uniform float lensFov;
-          uniform float lensSeparation;
-          varying vec3 worldDir;
-          const float PI = 3.14159265359;
-          const float deg2rad = PI / 180.0;
+          uniform float lensFovRad;
+          varying vec3 vDir;
+          const float PI = 3.14159265358979;
+
+          // project direction d onto lens whose axis is "axis"
+          // returns uv inside that lens circle, or vec2(-1.) when outside fov
+          vec2 lensUV(vec3 d, vec3 axis, vec2 centre, float circleR) {
+            float dist = acos(clamp(dot(d, axis), -1.0, 1.0));
+            float halfFov = lensFovRad * 0.5;
+            if (dist > halfFov) return vec2(-1.0);
+            float rn = dist / halfFov;                    // equidistant: r ∝ θ
+            vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), axis));
+            vec3 north = cross(axis, east);
+            vec3 perp = d - axis * dot(d, axis);
+            float psi = atan(dot(perp, north), dot(perp, east));
+            return centre + rn * circleR * vec2(cos(psi), -sin(psi));
+          }
+
           void main() {
-            float yaw = atan(worldDir.z, worldDir.x);
-            float pitch = asin(worldDir.y);
+            vec3 d = normalize(vDir);
 
-            float leftCenter  = -lensSeparation / 2.0;
-            float rightCenter =  lensSeparation / 2.0;
+            // X3-style square frame: two circles side by side.
+            // right circle = lens facing +Z, left circle = lens facing −Z
+            vec3 axisA = vec3(0.0, 0.0, 1.0);
+            vec3 axisB = vec3(0.0, 0.0, -1.0);
 
-            float distToLeft  = abs(yaw - leftCenter);
-            float distToRight = abs(yaw - rightCenter);
+            vec2 uv = lensUV(d, axisA, vec2(0.75, 0.5), 0.25);
+            float wA = uv.x >= 0.0 ? 1.0 : 0.0;
+            vec2 uvB = lensUV(d, axisB, vec2(0.25, 0.5), 0.25);
+            float wB = uvB.x >= 0.0 ? 1.0 : 0.0;
 
-            bool useLeft  = distToLeft <= distToRight;
-            bool useRight = distToRight < distToLeft;
+            if (wA + wB == 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
-            float fovRad = radians(lensFov);
-            float halfFov = fovRad / 2.0;
+            vec4 colA = wA > 0.0 ? texture2D(map, clamp(uv, 0.0, 1.0)) : vec4(0.0);
+            vec4 colB = wB > 0.0 ? texture2D(map, clamp(uvB, 0.0, 1.0)) : vec4(0.0);
 
-            float r_norm;
-            if (useLeft) {
-              float yawOffset = clamp(yaw - leftCenter, -halfFov, halfFov);
-              r_norm = abs(yawOffset) / halfFov;
-            } else if (useRight) {
-              float yawOffset = clamp(yaw - rightCenter, -halfFov, halfFov);
-              r_norm = abs(yawOffset) / halfFov;
-            } else {
-              gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-              return;
-            }
-
-            float relAngle = atan(pitch, yaw - (useLeft ? leftCenter : rightCenter));
-            float u = 0.5 + relAngle / (2.0 * PI);
-            float v = 0.5 + pitch / PI;
-
-            float radius = r_norm;
-
-            vec4 color = texture2D(map, vec2(u + (0.5 - radius), v + (0.5 - radius)));
-
-            gl_FragColor = color;
+            // soft blend across the overlap zone between the two lenses
+            float blend = 0.5;
+            gl_FragColor = mix(colB, colA, blend * wA + (1.0 - blend) * wB / max(wA + wB, 0.0001));
           }
         `,
-        uniforms: {
-          map: { value: new THREE.VideoTexture(videoRef.current) },
-          lensFov: { value: 220 },
-          lensSeparation: { value: Math.PI },
-        },
-        side: THREE.DoubleSide,
-        transparent: false,
-        depthWrite: true,
+        side: THREE.BackSide,
       })
-      materialRef.current = material
     } else {
-      // equirect: standard VideoTexture
-      material = new THREE.MeshBasicMaterial({
-        map: new THREE.VideoTexture(videoRef.current),
-      })
-      material.side = THREE.DoubleSide
-      materialRef.current = material
+      material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide })
     }
-
     const sphere = new THREE.Mesh(geometry, material)
-    sphereRef.current = sphere
-    sphere.position.set(0, 0, 0)
     scene.add(sphere)
 
-    // camera inside the sphere, looking toward center
-    const aspect = canvas.clientWidth / canvas.clientHeight
-    const camera = new THREE.PerspectiveCamera(90, aspect, 0.1, 1100)
-    camera.position.set(0, 0, 0)
-    cameraRef.current = camera
-    scene.add(camera)
+    const camera = new THREE.PerspectiveCamera(90, 16 / 9, 0.1, 1100)
 
-    function render() {
-      if (!cameraRef.current || !rendererRef.current || !sphereRef.current) return
+    const resize = () => {
+      const w = canvas.clientWidth || 640
+      const h = canvas.clientHeight || 360
+      renderer.setSize(w, h, false)
+      camera.aspect = w / h
+      camera.updateProjectionMatrix()
+    }
+    resize()
+    window.addEventListener('resize', resize)
 
-      // Apply pan/tilt/roll from state
-      const panRad = (panState * Math.PI) / 180
-      const tiltRad = (tiltState * Math.PI) / 180
-      const rollRad = ((initialRoll ?? 0) * Math.PI) / 180
+    // ---------- mini-map painter ----------
+    const mm = minimap.getContext('2d') as CanvasRenderingContext2D | null
+    const drawMinimap = () => {
+      if (!mm) return
+      const d = minimapDataRef.current
+      const m = 8
+      const gw = MINIMAP_W - 2 * m
+      const gh = MINIMAP_H - 2 * m
 
-      cameraRef.current!.rotation.set(tiltRad, panRad, rollRad, 'YXZ')
+      mm.fillStyle = 'rgba(10,10,18,0.72)'
+      mm.fillRect(0, 0, MINIMAP_W, MINIMAP_H)
 
-      // If fov changed, update camera
-      if (cameraRef.current!.fov !== fovState) {
-        cameraRef.current!.fov = fovState
-        cameraRef.current!.updateProjectionMatrix()
+      // grid: lon every 45°, lat every 30°
+      mm.strokeStyle = 'rgba(255,255,255,0.14)'
+      mm.lineWidth = 1
+      for (let i = 0; i <= 8; i++) {
+        const x = m + (gw / 8) * i
+        mm.beginPath(); mm.moveTo(x, m); mm.lineTo(x, m + gh); mm.stroke()
+      }
+      for (let i = 0; i <= 6; i++) {
+        const y = m + (gh / 6) * i
+        mm.beginPath(); mm.moveTo(m, y); mm.lineTo(m + gw, y); mm.stroke()
       }
 
-      // Update shader uniforms when using dfisheye projection
-      if (materialRef.current && projection === 'dfisheye') {
-        ;(materialRef.current as THREE.ShaderMaterial).uniforms.lensFov.value = fovState
-        // lensSeparation stays at π (X3 default)
+      const px = (panDeg: number) =>
+        m + (((((panDeg + 180) % 360) + 360) % 360) / 360) * gw
+      const py = (tiltDeg: number) =>
+        m + ((90 - Math.max(-90, Math.min(90, tiltDeg))) / 180) * gh
+
+      // keyframe path + dots
+      const kfs = [...d.keyframes].sort((a, b) => a.time - b.time)
+      if (kfs.length > 0) {
+        mm.strokeStyle = 'rgba(255,209,102,0.85)'
+        mm.lineWidth = 1.5
+        mm.beginPath()
+        kfs.forEach((kf, i) => (i === 0 ? mm.moveTo(px(kf.pan), py(kf.tilt)) : mm.lineTo(px(kf.pan), py(kf.tilt))))
+        mm.stroke()
+
+        for (const kf of kfs) {
+          const near = d.clipDuration > 0 && Math.abs(kf.time - d.clipTime) < 0.35
+          mm.fillStyle = near ? '#ffffff' : 'rgba(255,209,102,0.95)'
+          mm.strokeStyle = 'rgba(10,10,18,0.9)'
+          mm.lineWidth = 1.5
+          mm.beginPath()
+          mm.arc(px(kf.pan), py(kf.tilt), near ? 5.5 : 4, 0, Math.PI * 2)
+          mm.fill()
+          mm.stroke()
+        }
+
+        // progress along the path (clip-relative time → segment interpolation)
+        if (d.clipDuration > 0 && kfs.length > 1) {
+          const tt = Math.max(0, Math.min(d.clipDuration, d.clipTime))
+          let seg = 0
+          while (seg < kfs.length - 2 && kfs[seg + 1].time < tt) seg++
+          const a = kfs[seg]
+          const b = kfs[seg + 1]
+          const span = Math.max(b.time - a.time, 1e-6)
+          const k = Math.max(0, Math.min(1, (tt - a.time) / span))
+          const mx = px(a.pan + (b.pan - a.pan) * k)
+          const my = py(a.tilt + (b.tilt - a.tilt) * k)
+          mm.fillStyle = '#ffffff'
+          mm.beginPath()
+          mm.arc(mx, my, 3.5, 0, Math.PI * 2)
+          mm.fill()
+        }
       }
 
-      rendererRef.current.render(sceneRef.current!, cameraRef.current!)
-
-      // request next frame
-      requestAnimationFrame(render)
+      // live camera-position marker (pulsing ring)
+      const cx = px(d.camPan)
+      const cy = py(d.camTilt)
+      const pulse = 3 + Math.sin(performance.now() / 220) * 1.2
+      mm.strokeStyle = '#7ee787'
+      mm.lineWidth = 1.6
+      mm.beginPath()
+      mm.arc(cx, cy, pulse + 2.5, 0, Math.PI * 2)
+      mm.stroke()
+      mm.fillStyle = '#7ee787'
+      mm.beginPath()
+      mm.arc(cx, cy, 2.4, 0, Math.PI * 2)
+      mm.fill()
     }
 
-    // start render loop
-    render()
-
-    // handle window resize
-    const handleResize = () => {
-      if (!canvasRef.current || !cameraRef.current || !rendererRef.current) return
-      rendererRef.current.setSize(
-        canvasRef.current.clientWidth,
-        canvasRef.current.clientHeight,
-        false
+    // ---------- single render loop ----------
+    const loop = () => {
+      if (disposed) return
+      const v = viewRef.current
+      camera.rotation.order = 'YXZ'
+      camera.rotation.set(
+        (v.tilt * Math.PI) / 180,
+        (v.pan * Math.PI) / 180,
+        (v.roll * Math.PI) / 180
       )
-      if (cameraRef.current) {
-        cameraRef.current.aspect =
-          canvasRef.current.clientWidth / canvasRef.current.clientHeight
-        cameraRef.current.updateProjectionMatrix()
+      if (camera.fov !== v.fov) {
+        camera.fov = v.fov
+        camera.updateProjectionMatrix()
       }
+      if (projection === 'dfisheye') {
+        const u = (material as THREE.ShaderMaterial).uniforms.lensFovRad
+        u.value = (lensFov * Math.PI) / 180
+      }
+      renderer.render(scene, camera)
+      drawMinimap()
+      raf = requestAnimationFrame(loop)
     }
-    window.addEventListener('resize', handleResize)
+    loop()
 
-    // ---------- Interaction event listeners ----------
-    canvas.addEventListener('pointerdown', handlePointerDown as any)
-    canvas.addEventListener('pointermove', handlePointerMove as any)
-    canvas.addEventListener('pointerup', handlePointerUp as any)
-    canvas.addEventListener('wheel', handleWheel as any)
+    // ---------- listeners ----------
+    canvas.addEventListener('pointerdown', onPointerDown)
+    canvas.addEventListener('pointermove', onPointerMove)
+    canvas.addEventListener('pointerup', onPointerUp)
+    canvas.addEventListener('wheel', onWheel, { passive: false })
 
     return () => {
-      window.removeEventListener('resize', handleResize)
+      disposed = true
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', resize)
+      canvas.removeEventListener('pointerdown', onPointerDown)
+      canvas.removeEventListener('pointermove', onPointerMove)
+      canvas.removeEventListener('pointerup', onPointerUp)
+      canvas.removeEventListener('wheel', onWheel)
+      texture.dispose()
+      geometry.dispose()
+      material.dispose()
       renderer.dispose()
-
-      canvas.removeEventListener('pointerdown', handlePointerDown as any)
-      canvas.removeEventListener('pointermove', handlePointerMove as any)
-      canvas.removeEventListener('pointerup', handlePointerUp as any)
-      canvas.removeEventListener('wheel', handleWheel as any)
+      rendererRef.current = null
     }
-  }, [
-    videoTextureSource,
-    pan,
-    tilt,
-    initialRoll,
-    initialFov,
-    onViewChangeProp,
-    displayWidth,
-    displayHeight,
-    projection,
-  ])
+  }, [videoEl, projection, lensFov, onPointerDown, onPointerMove, onPointerUp, onWheel])
 
-  // debounced onViewChange helper
-  const runDebouncedOnViewChange = () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    const now = Date.now()
-    if (now - lastChangeRef.current > 50) {
-      lastChangeRef.current = now
-      onViewChangeProp?.(panState, tiltState, fovState)
-    } else {
-      debounceRef.current = setTimeout(() => {
-        lastChangeRef.current = Date.now()
-        onViewChangeProp?.(panState, tiltState, fovState)
-      }, 50 - (now - lastChangeRef.current))
-    }
-  }
-
-  // ---------- Pointer event handlers ----------
-  const handlePointerDown = (e: React.PointerEvent) => {
-    setIsDragging(true)
-    setDragStart({ x: e.clientX, y: e.clientY })
-  }
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDragging || !dragStart) return
-
-    const dx = e.clientX - dragStart.x
-    const dy = e.clientY - dragStart.y
-
-    // Accumulate pan (horizontal) and tilt (vertical)
-    setPanState((prev) => {
-      const newVal = prev + dx * 0.15 // 0.15° per pixel sensitivity
-      return ((newVal % 360) + 540) % 360 - 180
-    })
-    setTiltState((prev) => {
-      const newVal = prev + dy * 0.15
-      return Math.max(-89.9, Math.min(89.9, newVal))
-    })
-
-    setDragStart({ x: e.clientX, y: e.clientY })
-    runDebouncedOnViewChange()
-  }
-
-  const handlePointerUp = () => {
-    setIsDragging(false)
-    setDragStart(null)
-  }
-
-  const handleWheel = (e: React.WheelEvent) => {
-    const fovChange = e.deltaY * -0.05 // negative = zoom in
-
-    setFovState((prev) => Math.max(20, Math.min(140, prev + fovChange)))
-
-    runDebouncedOnViewChange()
-  }
-
-  // ---------- Render the canvas into DOM ----------
-
-  if (!videoRef.current || !canvasRef.current) {
-    return null
-  }
-
-  const canvas = canvasRef.current
-  ;(canvas as HTMLElement).style.width = `${displayWidth}px`
-  ;(canvas as HTMLElement).style.height = `${displayHeight}px`
+  // keyboard focus outline suppression while dragging
+  useEffect(() => {
+    if (!dragging) return
+    const stop = (e: Event) => e.preventDefault()
+    document.body.addEventListener('selectstart', stop)
+    return () => document.body.removeEventListener('selectstart', stop)
+  }, [dragging])
 
   return (
     <>
-      <canvas ref={canvasRef} className="preview-360-viewport" />
-      <canvas className="preview-360-minimap" />
+      <canvas
+        ref={canvasRef}
+        className={`preview-360-viewport ${dragging ? 'grabbing' : ''}`}
+      />
+      <canvas
+        ref={minimapRef}
+        width={MINIMAP_W}
+        height={MINIMAP_H}
+        className="preview-360-minimap"
+        title="Reframing map — click a dot to jump"
+        onClick={onMinimapClick}
+      />
     </>
   )
 }
