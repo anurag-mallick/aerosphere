@@ -45,6 +45,79 @@ function probeFile(filePath) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Hardware encoder detection
+// ---------------------------------------------------------------------------
+
+/** encoder ids we consider, in preference order per platform */
+const HW_CANDIDATES = {
+  darwin: {
+    h264: ['h264_videotoolbox'],
+    h265: ['hevc_videotoolbox'],
+  },
+  win32: {
+    h264: ['h264_nvenc', 'h264_qsv', 'h264_amf'],
+    h265: ['hevc_nvenc', 'hevc_qsv', 'hevc_amf'],
+  },
+  linux: {
+    h264: ['h264_nvenc', 'h264_qsv', 'h264_amf'],
+    h265: ['hevc_nvenc', 'hevc_qsv', 'hevc_amf'],
+  },
+};
+
+/**
+ * Pure: pick hardware encoders from `ffmpeg -encoders` output for a platform.
+ * Only reports an encoder when its id actually appears in the listing —
+ * platform alone proves nothing (GPU drivers vary).
+ */
+function selectHwEncoders(encodersOutput, platform) {
+  const candidates = HW_CANDIDATES[platform] || HW_CANDIDATES.linux;
+  const result = { h264: null, h265: null };
+  if (!encodersOutput) return result;
+  for (const family of ['h264', 'h265']) {
+    for (const id of candidates[family]) {
+      // encoder listing lines look like: " V....D h264_videotoolbox ...";
+      // match the id as a whole word so h264_qsv doesn't match h264_qsvox
+      const re = new RegExp(`\\s${id.replace(/_/g, '\\_')}\\s`);
+      if (re.test(encodersOutput)) {
+        result[family] = id;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+let hwEncoderCache = null;
+
+/**
+ * Detect hardware encoders once per process; later calls return the memoized
+ * result. Resolves to { h264: id|null, h265: id|null }.
+ */
+function detectHwEncoder(ffmpegPath) {
+  if (hwEncoderCache) return Promise.resolve(hwEncoderCache);
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn(ffmpegPath || resolveBinary('ffmpeg'), [
+        '-hide_banner', '-encoders',
+      ]);
+      let out = '';
+      proc.stdout.on('data', (d) => (out += d.toString()));
+      proc.on('error', () => {
+        hwEncoderCache = selectHwEncoders(null, process.platform);
+        resolve(hwEncoderCache);
+      });
+      proc.on('close', () => {
+        hwEncoderCache = selectHwEncoders(out, process.platform);
+        resolve(hwEncoderCache);
+      });
+    } catch {
+      hwEncoderCache = { h264: null, h265: null };
+      resolve(hwEncoderCache);
+    }
+  });
+}
+
 /**
  * Extract normalized media metadata from raw ffprobe JSON.
  * Throws a user-facing Error when the probe result is malformed.
@@ -72,4 +145,4 @@ function extractMetadata(data) {
   };
 }
 
-module.exports = { resolveBinary, probeFile, extractMetadata };
+module.exports = { resolveBinary, probeFile, extractMetadata, detectHwEncoder, selectHwEncoders };

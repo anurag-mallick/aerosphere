@@ -3,6 +3,7 @@ import './App.css'
 import type {
   ExportProgress,
   ExportTimelineOptions,
+  HwEncoders,
   LibraryAudio,
   LibraryPhoto,
   LibraryVideo,
@@ -193,6 +194,8 @@ const [exportResolution, setExportResolution] =
     useState<keyof typeof RESOLUTION_PRESETS>('1080')
   const [exportFps, setExportFps] = useState(30)
   const [exportFormat, setExportFormat] = useState<OutputFormat>('mp4-hevc')
+  const [useHwEnc, setUseHwEnc] = useState(true)
+  const [hwEncoders, setHwEncoders] = useState<HwEncoders | null>(null)
   const [deliveryPreset, setDeliveryPreset] = useState('YouTube — 1080p')
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportState, setExportState] = useState<ExportProgress | null>(null)
@@ -1332,8 +1335,9 @@ const [exportResolution, setExportResolution] =
         dehum: c.dehum || 'off',
         durationTl: c.duration,
       })),
+      useHwEncoding: useHwEnc,
     }
-  }, [videoTracksList, audioTracksList, exportResolution, exportFps, exportFormat])
+  }, [videoTracksList, audioTracksList, exportResolution, exportFps, exportFormat, useHwEnc])
 
   const executeExport = useCallback(async (
     outputPath: string,
@@ -1444,6 +1448,11 @@ const [exportResolution, setExportResolution] =
   const openExportDialog = useCallback(() => {
     setError(null)
     setShowExportDialog(true)
+    // probe once per dialog open — cheap (memoized in the main process)
+    window.electronAPI
+      .detectHwEncoders()
+      .then((map) => setHwEncoders(map))
+      .catch(() => setHwEncoders({ h264: null, h265: null }))
   }, [])
 
   // -------------------------------------------------------------------- view
@@ -1718,6 +1727,25 @@ const [exportResolution, setExportResolution] =
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="form-row form-row-check">
+              <label htmlFor="export-hw" className="check-label">
+                <input
+                  id="export-hw"
+                  type="checkbox"
+                  checked={useHwEnc}
+                  disabled={!hwEncoders || (!hwEncoders.h264 && !hwEncoders.h265)}
+                  onChange={(e) => setUseHwEnc(e.target.checked)}
+                />
+                Use hardware encoding (faster)
+                <span className="hw-hint">
+                  {hwEncoders
+                    ? hwEncoders.h264 || hwEncoders.h265
+                      ? `${hwEncoders.h264 ?? hwEncoders.h265} detected — falls back to software on failure`
+                      : 'no hardware encoder available — using software'
+                    : 'detecting…'}
+                </span>
+              </label>
             </div>
             <p className="export-meta">
               {videoTracksList.reduce((n, t) => n + t.clips.length, 0)} visual clips ·{' '}

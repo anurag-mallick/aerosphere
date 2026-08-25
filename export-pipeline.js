@@ -13,13 +13,18 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { buildReframePlan } = require('./keyframe-filter');
-const { resolveBinary, probeFile, extractMetadata } = require('./src-shared/ffmpeg-utils');
+const { resolveBinary, probeFile, extractMetadata, detectHwEncoder } = require('./src-shared/ffmpeg-utils');
 const { buildCompositePlan } = require('./composite-plan');
 
 let activeProcess = null;
 let cancelled = false;
 
-function runFfmpeg(args, opts) {
+/** set when the user cancels — suppresses the hw→sw retry for cancelled encodes */
+let hwFallbackBlocked = false;
+/** number of encodes that fell back from hardware to software this run */
+let hwFallbackCount = 0;
+
+function runFfmpegOnce(args, opts) {
   return new Promise((resolve, reject) => {
     const proc = spawn(
       resolveBinary('ffmpeg'),
@@ -58,6 +63,30 @@ function runFfmpeg(args, opts) {
   });
 }
 
+/**
+ * Hardware-encoder wrapper: if the encode args reference a hardware encoder
+ * and the spawn fails (VRAM exhaustion, revoked GPU session, concurrent GPU
+ * use…), retry the SAME command once with the software encoder before
+ * treating it as a real failure. Non-encode calls (concat, mix) pass through.
+ */
+async function runFfmpeg(args, opts) {
+  try {
+    return await runFfmpegOnce(args, opts);
+  } catch (err) {
+    const hwIdx = args.findIndex((a) => HW_ENCODER_IDS.has(a));
+    if (hwIdx === -1 || hwFallbackBlocked) throw err;
+    const hwId = args[hwIdx];
+    const patched = [
+      ...args.slice(0, hwIdx - 1), // drop '-c:v'
+      ...softwareArgsFor(hwId),    // our hw blocks are exactly ['-c:v', id, flag, value]
+      ...args.slice(hwIdx + 3),
+    ];
+    hwFallbackCount += 1;
+    console.warn(`[export] hardware encoder ${hwId} failed (${String(err.message || err).slice(0, 120)}) — retrying with software encoder`);
+    return await runFfmpegOnce(patched, opts);
+  }
+}
+
 function clampPct(v) {
   return Math.max(0, Math.min(100, v));
 }
@@ -77,15 +106,92 @@ function requestCancel() {
   }
 }
 
-function videoCodecArgs(codec) {
+/** ids that indicate a hardware encoder in a codec-args array */
+const HW_ENCODER_IDS = new Set([
+  'h264_videotoolbox', 'h264_nvenc', 'h264_qsv', 'h264_amf',
+  'hevc_videotoolbox', 'hevc_nvenc', 'hevc_qsv', 'hevc_amf',
+]);
+
+/** software equivalent block for a hardware encoder id (fallback path) */
+function softwareArgsFor(hwId) {
+  return hwId.startsWith('hevc')
+    ? ['-c:v', 'libx265', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
+    : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p'];
+}
+
+/**
+ * VideoToolbox constant-quality settings. The M2 media engine has no CRF;
+ * -q:v (0-100) is its constant-quality mode — chosen to visually match the
+ * software CRF presets (h264 q65 ≈ crf20, hevc q60 ≈ crf22, master q70 ≈ crf18).
+ * Constant quality beats fixed bitrate on this fanless machine: complex
+ * footage gets the bits it needs without a thermal-inducing rate race.
+ */
+const VT_QUALITY = { h264: 65, h265: 60, master: 70 };
+
+/** Apple's VideoToolbox H.264 hardware encoder refuses frames wider than 4096 */
+const VT_H264_MAX_W = 4096;
+
+/**
+ * Codec args for one encode.
+ *
+ * `hw` is the detected encoder map (null when hardware is disabled or
+ * unavailable); `dims` feeds encoder limits; `swCrf` overrides the software
+ * CRF for callers that need master-grade intermediates.
+ *
+ * M2-logical hardware rules:
+ *  - VideoToolbox is the only hw encoder on darwin and the M2 media engine
+ *    runs cool — software encodes on this fanless Air throttle hard, so hw
+ *    is the default whenever the probe found it.
+ *  - VT H.264 hardware sessions max out at 4096 wide. For wider frames
+ *    (the 5760-wide X3 combine master) substitute hevc_videotoolbox (VT HEVC
+ *    handles 8K) when present, otherwise fall through to software.
+ *  - prores stays software-only: the plain M2 has no ProRes media engine.
+ */
+function videoCodecArgs(codec, hw, dims, maxKbps, swCrf) {
+  const width = dims?.width || 1920;
   if (codec === 'h265' || codec === 'hevc') {
-    return ['-c:v', 'libx265', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    const enc = hw && hw.h265;
+    if (enc === 'hevc_videotoolbox') {
+      return ['-c:v', enc, '-q:v', String(VT_QUALITY.h265), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    if (enc === 'hevc_nvenc') {
+      return ['-c:v', enc, '-preset', 'p5', '-cq', '22', '-b:v', '0', '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    if (enc === 'hevc_qsv') {
+      return ['-c:v', enc, '-preset', 'medium', '-global_quality', '22', '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    if (enc === 'hevc_amf') {
+      const bpp = 0.05;
+      const kbps = Math.min(Math.max(Math.round((width * (dims?.height || 1080) * Math.max(1, dims?.fps || 30) * bpp) / 1000), 1500), maxKbps || 40000);
+      return ['-c:v', enc, '-quality', 'balanced', '-b:v', `${kbps}k`, '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    return ['-c:v', 'libx265', '-preset', 'veryfast', '-crf', String(swCrf || 22), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
   }
   if (codec === 'prores') {
-    // editing master — 10-bit 4:2:2, PCM audio in MOV
+    // editing master — 10-bit 4:2:2, PCM audio in MOV (software-only)
     return ['-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le', '-c:a', 'pcm_s16le'];
   }
-  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p'];
+  const enc = hw && hw.h264;
+  const vtTooNarrow = enc === 'h264_videotoolbox' && width > VT_H264_MAX_W;
+  if (enc === 'h264_videotoolbox' && !vtTooNarrow) {
+    return ['-c:v', enc, '-q:v', String(VT_QUALITY.h264), '-pix_fmt', 'yuv420p'];
+  }
+  if (enc === 'h264_videotoolbox' && vtTooNarrow && hw && hw.h265 === 'hevc_videotoolbox') {
+    // frame exceeds VT H.264 limits but VT HEVC handles 8K — substitute
+    return ['-c:v', 'hevc_videotoolbox', '-q:v', String(VT_QUALITY.master), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+  }
+  if (enc === 'h264_nvenc') {
+    return ['-c:v', enc, '-preset', 'p5', '-cq', '20', '-b:v', '0', '-pix_fmt', 'yuv420p'];
+  }
+  if (enc === 'h264_qsv') {
+    return ['-c:v', enc, '-preset', 'medium', '-global_quality', '20', '-pix_fmt', 'yuv420p'];
+  }
+  if (enc === 'h264_amf') {
+    const bpp = 0.075;
+    const kbps = Math.min(Math.max(Math.round((width * (dims?.height || 1080) * Math.max(1, dims?.fps || 30) * bpp) / 1000), 1500), maxKbps || 40000);
+    return ['-c:v', enc, '-quality', 'balanced', '-b:v', `${kbps}k`, '-pix_fmt', 'yuv420p'];
+  }
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(swCrf || 20), '-pix_fmt', 'yuv420p'];
 }
 
 /** extension + audio codec for a requested output format */
@@ -108,7 +214,7 @@ function outputSpec(format) {
  * Pure arg-builder for the final container conversion.
  * Returns null when the internal mp4 can be used as-is (plain copy).
  */
-function buildFinalizeArgs(spec, input, output) {
+function buildFinalizeArgs(spec, input, output, hw, dims) {
   if (spec.ext === 'mp4') {
     // internal pipeline is already mp4/h264 or mp4/hevc with aac — just copy
     return { args: ['-i', input, '-c', 'copy', output], reencode: false };
@@ -118,7 +224,7 @@ function buildFinalizeArgs(spec, input, output) {
       ? ['-c:v', 'libvpx-vp9', '-crf', '34', '-b:v', '0', '-row-mt', '1', '-pix_fmt', 'yuv420p']
       : spec.videoCodec === 'prores'
         ? ['-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le']
-        : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p'];
+        : videoCodecArgs('h264', hw, dims);
   return {
     args: ['-i', input, ...videoArgs, ...spec.audioArgs, '-movflags', '+faststart', output],
     reencode: true,
@@ -466,7 +572,10 @@ function buildTimelineSubtitles(visualClips, workDir) {
 }
 
 function checkCancelled() {
-  if (cancelled) throw Object.assign(new Error('Export cancelled'), { cancelled: true });
+  if (cancelled) {
+    hwFallbackBlocked = true; // never retry a cancelled encode on software
+    throw Object.assign(new Error('Export cancelled'), { cancelled: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +598,14 @@ async function runExport(options) {
     .filter((m) => m && m.path)
     .map((m) => ({ ...m, path: path.resolve(m.path) }));
   const onProgress = options.onProgress || (() => {});
+
+  // hardware encoders: probed once per process; the export-dialog toggle can
+  // force software (useHwEncoding === false) for compatibility/quality masters
+  hwFallbackBlocked = false;
+  hwFallbackCount = 0;
+  const hw = options.useHwEncoding === false
+    ? { h264: null, h265: null }
+    : await detectHwEncoder(resolveBinary('ffmpeg'));
 
   if (visualClips.length === 0) {
     return { ok: false, cancelled: false, error: 'Timeline has no clips to export.' };
@@ -513,7 +630,10 @@ async function runExport(options) {
           '[0:v]fps=30,setpts=PTS-STARTPTS[a];[1:v]fps=30,setpts=PTS-STARTPTS[b];' +
           '[a][b]hstack=inputs=2,format=yuv420p[v]',
         '-map', '[v]', '-an',
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+        // 2×2880-wide X3 master: hw path auto-substitutes hevc_videotoolbox
+        // (VT H.264 caps at 4096 wide, VT HEVC does 8K); sw path keeps the
+        // original crf-18 master quality
+        ...videoCodecArgs('h264', hw, { width: 5760, height: 2880, fps: 30 }, 130000, 18),
         out,
       ]);
       combinedCache.set(key, out);
@@ -629,7 +749,7 @@ async function runExport(options) {
     const segmentTasks = []; // { stage, fn: async () => segPath }
     const nextSegPath = () => path.join(workDir, `seg-${segmentTasks.length}.mp4`);
     const queueTask = (stage, fn) => segmentTasks.push({ stage, fn });
-    const encArgs = () => [...videoCodecArgs('h264'), '-threads', jobThreads];
+    const encArgs = () => [...videoCodecArgs('h264', hw, { width, height, fps }), '-threads', jobThreads];
 
     for (const piece of pieces) {
       checkCancelled();
@@ -922,7 +1042,7 @@ async function runExport(options) {
         args.push(
           '-vf',
           `subtitles=${subtitleFile}:force_style='FontSize=15,PrimaryColour=&H00FFFFFF&,OutlineColour=&H66000000&,BorderStyle=1,Shadow=0,MarginV=14'`,
-          ...videoCodecArgs('h264'),
+          ...videoCodecArgs('h264', hw, { width, height, fps }),
         );
       } else {
         args.push('-c:v', 'copy');
@@ -942,7 +1062,7 @@ async function runExport(options) {
       fs.copyFileSync(finalPath, outputPath);
     } else {
       onProgress(99, `Writing ${String(outSpec.ext).toUpperCase()} file`);
-      const fin = buildFinalizeArgs(outSpec, finalPath, outputPath);
+      const fin = buildFinalizeArgs(outSpec, finalPath, outputPath, hw, { width, height, fps });
       await runFfmpeg(fin.args);
     }
     onProgress(100, 'Done');

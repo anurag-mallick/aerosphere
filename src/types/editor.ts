@@ -274,6 +274,11 @@ export interface ExportVideoTrack {
   clips: ExportVisualClip[]
 }
 
+export interface HwEncoders {
+  h264: string | null
+  h265: string | null
+}
+
 export interface ExportTimelineOptions {
   outputPath: string
   width: number
@@ -284,6 +289,8 @@ export interface ExportTimelineOptions {
   /** full track array in top-to-bottom stacking order */
   videoTracks: ExportVideoTrack[]
   musicClips: ExportMusicClip[]
+  /** false forces software encoders even when hardware is available */
+  useHwEncoding?: boolean
 }
 
 export interface ExportResult {
@@ -331,6 +338,7 @@ export interface ElectronAPI {
   openDirectoryDialog: () => Promise<string[]>
 
   checkFfmpeg: () => Promise<FfmpegStatus>
+  detectHwEncoders: () => Promise<HwEncoders>
   getVideoMetadata: (filePath: string) => Promise<MetadataResult>
   generateThumbnail: (
     filePath: string,

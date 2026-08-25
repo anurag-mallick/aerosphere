@@ -1483,3 +1483,24 @@ kbd {
   opacity: 1;
   color: #7ee787;
 }
+
+/* hardware encoding toggle in export dialog */
+.form-row-check {
+  justify-content: flex-start;
+}
+.form-row-check .check-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.form-row-check .check-label input[type='checkbox'] {
+  accent-color: #7ee787;
+  width: 15px;
+  height: 15px;
+}
+.form-row-check .hw-hint {
+  font-size: 0.66rem;
+  opacity: 0.65;
+}

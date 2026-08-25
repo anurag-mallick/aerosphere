@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // media inspection / processing
   checkFfmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
+  detectHwEncoders: () => ipcRenderer.invoke('detect-hw-encoders'),
   getVideoMetadata: (filePath) => ipcRenderer.invoke('get-video-metadata', filePath),
   generateThumbnail: (filePath, timeSec) =>
     ipcRenderer.invoke('generate-thumbnail', filePath, timeSec),

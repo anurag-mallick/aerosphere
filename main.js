@@ -300,6 +300,15 @@ ipcMain.handle('open-directory-dialog', async () => {
 // FFmpeg IPC
 // ---------------------------------------------------------------------------
 
+ipcMain.handle('detect-hw-encoders', async () => {
+  try {
+    const { detectHwEncoder } = require('./src-shared/ffmpeg-utils');
+    return await detectHwEncoder(resolveBinary('ffmpeg'));
+  } catch {
+    return { h264: null, h265: null };
+  }
+});
+
 ipcMain.handle('check-ffmpeg', async () => {
   if (ffmpegVersion === null) {
     ffmpegVersion = await detectFfmpegVersion();
